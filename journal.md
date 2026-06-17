@@ -116,3 +116,42 @@ So `context` was always None, which meant the perspectives agent had no real con
 on. Fixed to `context=result.text`. Offline tests caught this immediately (AttributeError on
 the mock Research object). Lesson: always run the offline tests before committing pipeline
 changes, even small ones.
+
+## 2026-06-17 21:18 — Scheduling overhaul: flexible frequency, free-text time, /schedule + /timezone
+
+**Why:** The old system had three hard-coded options (daily/twice-daily/weekly) and
+seven fixed time buttons. User wanted: any day combination, any time (typed), ability
+to change schedule later without re-creating a topic, and timezone update when traveling.
+
+**What changed:**
+
+*New frequency types* (8 total): `daily`, `twice_daily`, `weekdays` (Mon–Fri), `mwf`
+(Mon/Wed/Fri), `tuth` (Tue/Thu), `custom_days` (multi-select via toggle keyboard),
+`weekly`, `biweekly`. All flow through `is_due()` in jobs.py.
+
+*Days before time:* The UX flow is now: schedule type → day picker (if needed) → time →
+timezone → sources. Previously it was type → tz → time → day.
+
+*Free-text time input:* User types "9:00" or "21:30" or "9am". `_parse_time()` handles
+common formats. Minutes are stored in `send_minute` (DB migration 003) but scheduling
+is still hourly (cron fires once/hour and checks `send_hour`). Sub-hour display is shown
+but actual precision is ±1h. This is acceptable and honest.
+
+*`/schedule` command:* Lets users change the schedule for any existing topic at any time.
+Implemented by adding `/schedule` as a second entry point in the same ConversationHandler
+as `/add_topic` — both paths share the `_ask_sched_type → _ask_sched_days → _ask_time`
+handlers. `context.user_data["sched_mode"]` ("create" vs "update") determines what happens
+at the end.
+
+*`/timezone` command:* Separate command that updates timezone for an existing topic.
+Telegram can't read device timezone — this is a real platform limitation. The best we can
+do is make it easy to update manually. Explained this to user in the timezone prompt message.
+
+*Bug found:* Day-of-week checks for weekdays/mwf/tuth/custom_days were inside the
+`match` block that runs AFTER `if last_sent_at is None: return True`. This meant the
+first delivery always fired, even on the wrong day (e.g., Saturday on a weekdays schedule).
+Fixed by splitting the logic: day-of-week checks run first, then the `last_sent_at is None`
+early return, then the "how long since last sent" check.
+
+*DB:* Migration 003 adds `send_minute INT DEFAULT 0` and `schedule_days TEXT DEFAULT ''`.
+Both backward compatible — existing topics default to minute=0 and no custom days.

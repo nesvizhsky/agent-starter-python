@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from loguru import logger
 from pydantic_ai import Agent
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
@@ -28,13 +28,21 @@ from agent.config import get_settings
 from agent.logging_setup import setup_logging
 from agent.services.llm import build_model
 from disputatio import jobs, store
+from disputatio.models import Topic
 from disputatio.personas import all_keys
 
 # ---------------------------------------------------------------------------
-# ConversationHandler states for /add_topic
+# ConversationHandler states (shared by /add_topic and /schedule)
 # ---------------------------------------------------------------------------
 
-_ASK_DESC, _ASK_NAME_CONFIRM, _ASK_FREQ, _ASK_TZ, _ASK_TIME, _ASK_DAY, _ASK_SOURCES = range(7)
+_AT_DESC = 0  # /add_topic: enter description
+_AT_NAME_CONFIRM = 1  # /add_topic: confirm LLM-generated name
+_ASK_SCHED_TYPE = 2  # both: pick frequency type
+_ASK_SCHED_DAYS = 3  # both: pick days (custom/weekly/biweekly)
+_ASK_TIME = 4  # both: type a time
+_ASK_TZ = 5  # /add_topic only: pick timezone
+_AT_SOURCES = 6  # /add_topic only: enter sources
+_SC_PICK = 7  # /schedule: topic picker
 
 # ---------------------------------------------------------------------------
 # Name-generation agent (fast + cheap — just makes a 2-4 word label)
@@ -59,6 +67,43 @@ async def _generate_name(description: str) -> str:
 _VALID_SIGNALS = {"good", "too_shallow", "too_long", "already_knew", "wrong_persona"}
 
 # ---------------------------------------------------------------------------
+# Schedule constants
+# ---------------------------------------------------------------------------
+
+_DOW_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+_DOW_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+_SCHED_TYPE_LABELS: dict[str, str] = {
+    "daily": "Every day",
+    "twice_daily": "Twice daily",
+    "weekdays": "Mon–Fri",
+    "mwf": "Mon/Wed/Fri",
+    "tuth": "Tue/Thu",
+    "custom_days": "Pick days…",
+    "weekly": "Once a week",
+    "biweekly": "Every 2 weeks",
+}
+
+# Frequency types that require a day-selection step
+_NEEDS_DAYS = frozenset({"custom_days", "weekly", "biweekly"})
+
+# (display label, IANA timezone name)
+_TIMEZONES = [
+    ("UTC-8  LA", "America/Los_Angeles"),
+    ("UTC-6  Chicago", "America/Chicago"),
+    ("UTC-5  New York", "America/New_York"),
+    ("UTC+0  London", "Europe/London"),
+    ("UTC+1  Paris", "Europe/Paris"),
+    ("UTC+2  Helsinki", "Europe/Helsinki"),
+    ("UTC+3  Moscow", "Europe/Moscow"),
+    ("UTC+4  Dubai", "Asia/Dubai"),
+    ("UTC+5:30  India", "Asia/Kolkata"),
+    ("UTC+8  Singapore", "Asia/Singapore"),
+    ("UTC+9  Tokyo", "Asia/Tokyo"),
+    ("UTC+10  Sydney", "Australia/Sydney"),
+]
+
+# ---------------------------------------------------------------------------
 # Auth helper
 # ---------------------------------------------------------------------------
 
@@ -76,6 +121,16 @@ async def _allowed(update: Update) -> bool:
             await update.message.reply_text("This bot isn't open to the public yet.")
         return False
     return True
+
+
+async def _reply(update: Update, text: str, **kwargs: object) -> None:
+    """Send a new reply message regardless of whether the trigger was a message or callback."""
+    if update.message:
+        await update.message.reply_text(text, **kwargs)  # type: ignore[arg-type]
+    elif update.callback_query:
+        cq_msg = update.callback_query.message
+        if isinstance(cq_msg, Message):
+            await cq_msg.reply_text(text, **kwargs)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +153,8 @@ _WELCOME = (
     "/reset — clear seen articles (fetch fresh)\n"
     "/synthesis — weekly synthesis\n\n"
     "*Settings*\n"
+    "/schedule — change when a topic sends\n"
+    "/timezone — update timezone for a topic\n"
     "/pause — pause a topic\n"
     "/resume — resume a topic\n"
     "/add\\_source — add a source to a topic\n"
@@ -117,26 +174,28 @@ async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /add_topic conversation
+# /add_topic conversation — entry
 # ---------------------------------------------------------------------------
 
 
 async def cmd_add_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None or not await _allowed(update):
         return ConversationHandler.END
+    if context.user_data is not None:
+        context.user_data["sched_mode"] = "create"
     await update.message.reply_text(
         "What do you want to track?\n\nDescribe it in a sentence — I'll suggest a name."
     )
-    return _ASK_DESC
+    return _AT_DESC
 
 
 async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None or not update.message.text or context.user_data is None:
-        return _ASK_DESC
+        return _AT_DESC
     desc = update.message.text.strip()
     if not desc:
         await update.message.reply_text("Please describe what you want to track.")
-        return _ASK_DESC
+        return _AT_DESC
     context.user_data["new_topic_desc"] = desc
 
     await update.message.chat.send_action(ChatAction.TYPING)
@@ -158,7 +217,7 @@ async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ),
         parse_mode="Markdown",
     )
-    return _ASK_NAME_CONFIRM
+    return _AT_NAME_CONFIRM
 
 
 async def _name_confirmed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -167,7 +226,7 @@ async def _name_confirmed(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.answer()
         name = context.user_data.get("new_topic_name", "") if context.user_data else ""
         await query.edit_message_text(f"✓ *{name}*", parse_mode="Markdown")
-    return await _ask_freq(update, context)
+    return await _ask_sched_type(update, context)
 
 
 async def _name_rename_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -175,72 +234,289 @@ async def _name_rename_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE
     if query:
         await query.answer()
         await query.edit_message_text("Type a short label for this topic:")
-    return _ASK_NAME_CONFIRM
+    return _AT_NAME_CONFIRM
 
 
 async def _got_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None or not update.message.text or context.user_data is None:
-        return _ASK_NAME_CONFIRM
+        return _AT_NAME_CONFIRM
     name = update.message.text.strip()
     if not name:
         await update.message.reply_text("Please type a short label.")
-        return _ASK_NAME_CONFIRM
+        return _AT_NAME_CONFIRM
     context.user_data["new_topic_name"] = name
-    return await _ask_freq(update, context)
+    return await _ask_sched_type(update, context)
 
 
-_FREQ_LABELS = {"daily": "Daily", "twice_daily": "Twice daily", "weekly": "Weekly"}
-_DOW_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-_TIME_OPTIONS = [7, 8, 9, 12, 15, 18, 20]  # hours offered as buttons
-
-# (display label, IANA timezone name)
-_TIMEZONES = [
-    ("UTC-8  LA", "America/Los_Angeles"),
-    ("UTC-6  Chicago", "America/Chicago"),
-    ("UTC-5  New York", "America/New_York"),
-    ("UTC+0  London", "Europe/London"),
-    ("UTC+1  Paris", "Europe/Paris"),
-    ("UTC+2  Helsinki", "Europe/Helsinki"),
-    ("UTC+3  Moscow", "Europe/Moscow"),
-    ("UTC+4  Dubai", "Asia/Dubai"),
-    ("UTC+5:30  India", "Asia/Kolkata"),
-    ("UTC+8  Singapore", "Asia/Singapore"),
-    ("UTC+9  Tokyo", "Asia/Tokyo"),
-    ("UTC+10  Sydney", "Australia/Sydney"),
-]
+# ---------------------------------------------------------------------------
+# /schedule conversation — entry
+# ---------------------------------------------------------------------------
 
 
-async def _ask_freq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message is None or not await _allowed(update):
+        return ConversationHandler.END
+    tg = update.effective_user
+    if tg is None:
+        return ConversationHandler.END
+
+    if context.user_data is not None:
+        context.user_data["sched_mode"] = "update"
+
+    name = " ".join(context.args or []).strip()  # type: ignore[union-attr]
+    if not name:
+        topics = await store.get_topics(tg.id)
+        if not topics:
+            await update.message.reply_text(
+                "You have no topics yet. Use /add\\_topic to create one.",
+                parse_mode="Markdown",
+            )
+            return ConversationHandler.END
+        buttons = [[InlineKeyboardButton(t.name, callback_data=f"sc_pick:{t.id}")] for t in topics]
+        await update.message.reply_text(
+            "Which topic to reschedule?", reply_markup=InlineKeyboardMarkup(buttons)
+        )
+        return _SC_PICK
+
+    topic = await store.get_topic_by_name(tg.id, name)
+    if topic is None:
+        await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
+        return ConversationHandler.END
+
+    if context.user_data is not None:
+        context.user_data["sched_topic_id"] = str(topic.id)
+    return await _ask_sched_type(update, context)
+
+
+async def _sc_got_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Topic selected from the /schedule picker."""
+    query = update.callback_query
+    if query is None or query.data is None or context.user_data is None:
+        return _SC_PICK
+    await query.answer()
+    topic_id_str = query.data.split(":", 1)[1]
+    context.user_data["sched_topic_id"] = topic_id_str
+    await query.edit_message_text("Changing schedule…")
+    return await _ask_sched_type(update, context)
+
+
+# ---------------------------------------------------------------------------
+# Shared scheduling flow: type → days → time
+# ---------------------------------------------------------------------------
+
+
+async def _ask_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("Daily", callback_data="freq:daily"),
-                InlineKeyboardButton("Twice daily", callback_data="freq:twice_daily"),
-                InlineKeyboardButton("Weekly", callback_data="freq:weekly"),
-            ]
+                InlineKeyboardButton("Every day", callback_data="sched:daily"),
+                InlineKeyboardButton("Twice daily", callback_data="sched:twice_daily"),
+                InlineKeyboardButton("Mon–Fri", callback_data="sched:weekdays"),
+            ],
+            [
+                InlineKeyboardButton("Mon/Wed/Fri", callback_data="sched:mwf"),
+                InlineKeyboardButton("Tue/Thu", callback_data="sched:tuth"),
+                InlineKeyboardButton("Pick days…", callback_data="sched:custom_days"),
+            ],
+            [
+                InlineKeyboardButton("Once a week", callback_data="sched:weekly"),
+                InlineKeyboardButton("Every 2 weeks", callback_data="sched:biweekly"),
+            ],
         ]
     )
-    msg = "How often do you want updates?"
-    if update.message:
-        await update.message.reply_text(msg, reply_markup=keyboard)
-    elif update.callback_query and update.callback_query.message:
-        from telegram import Message as TGMessage
-
-        cq_msg = update.callback_query.message
-        if isinstance(cq_msg, TGMessage):
-            await cq_msg.reply_text(msg, reply_markup=keyboard)
-    return _ASK_FREQ
+    await _reply(update, "How often would you like updates?", reply_markup=keyboard)
+    return _ASK_SCHED_TYPE
 
 
-async def _got_freq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def _got_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or query.data is None or context.user_data is None:
+        return _ASK_SCHED_TYPE
+    await query.answer()
+    freq = query.data.split(":", 1)[1]
+    context.user_data["new_topic_freq"] = freq
+    await query.edit_message_text(f"✓ {_SCHED_TYPE_LABELS.get(freq, freq)}")
+
+    if freq in _NEEDS_DAYS:
+        mode = "single" if freq in {"weekly", "biweekly"} else "multi"
+        context.user_data["sched_days_mode"] = mode
+        context.user_data["selected_days"] = set()
+        return await _ask_sched_days(update, context)
+    return await _ask_time(update, context)
+
+
+def _day_toggle_keyboard(selected: set[int]) -> InlineKeyboardMarkup:
+    def lbl(i: int) -> str:
+        return f"✓ {_DOW_SHORT[i]}" if i in selected else _DOW_SHORT[i]
+
+    row1 = [InlineKeyboardButton(lbl(i), callback_data=f"day_toggle:{i}") for i in range(4)]
+    row2 = [InlineKeyboardButton(lbl(i), callback_data=f"day_toggle:{i}") for i in range(4, 7)]
+    done_row = [InlineKeyboardButton("Done ✓", callback_data="day_done")]
+    return InlineKeyboardMarkup([row1, row2, done_row])
+
+
+def _day_single_keyboard() -> InlineKeyboardMarkup:
+    def _btn(i: int) -> InlineKeyboardButton:
+        return InlineKeyboardButton(_DOW_SHORT[i], callback_data=f"dow_single:{i}")
+
+    return InlineKeyboardMarkup([[_btn(i) for i in range(4)], [_btn(i) for i in range(4, 7)]])
+
+
+async def _ask_sched_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    ud = context.user_data
+    mode = ud.get("sched_days_mode", "single") if ud else "single"
+    if mode == "multi":
+        selected: set[int] = ud.get("selected_days", set()) if ud else set()
+        await _reply(
+            update,
+            "Which days? Tap to select, then tap *Done ✓*.",
+            reply_markup=_day_toggle_keyboard(selected),
+            parse_mode="Markdown",
+        )
+    else:
+        freq = ud.get("new_topic_freq", "weekly") if ud else "weekly"
+        label = "week" if freq == "weekly" else "2 weeks"
+        await _reply(
+            update,
+            f"Which day? (once every {label})",
+            reply_markup=_day_single_keyboard(),
+        )
+    return _ASK_SCHED_DAYS
+
+
+async def _toggle_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Tap a day to toggle it in the multi-select picker."""
+    query = update.callback_query
+    if query is None or query.data is None or context.user_data is None:
+        return _ASK_SCHED_DAYS
+    await query.answer()
+    day_idx = int(query.data.split(":", 1)[1])
+    selected: set[int] = context.user_data.get("selected_days", set())
+    if day_idx in selected:
+        selected.discard(day_idx)
+    else:
+        selected.add(day_idx)
+    context.user_data["selected_days"] = selected
+    await query.edit_message_reply_markup(reply_markup=_day_toggle_keyboard(selected))
+    return _ASK_SCHED_DAYS
+
+
+async def _done_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Done button in multi-select day picker."""
     query = update.callback_query
     if query is None or context.user_data is None:
-        return _ASK_FREQ
+        return _ASK_SCHED_DAYS
+    selected: set[int] = context.user_data.get("selected_days", set())
+    if not selected:
+        await query.answer("Pick at least one day.", show_alert=True)
+        return _ASK_SCHED_DAYS
     await query.answer()
-    freq = query.data.split(":")[1] if query.data else "daily"
-    context.user_data["new_topic_freq"] = freq
-    await query.edit_message_text(f"✓ {_FREQ_LABELS.get(freq, freq)}", parse_mode="Markdown")
+    days_str = ",".join(str(d) for d in sorted(selected))
+    context.user_data["new_topic_schedule_days"] = days_str
+    day_names = " / ".join(_DOW_SHORT[d] for d in sorted(selected))
+    await query.edit_message_text(f"✓ {day_names}")
+    return await _ask_time(update, context)
+
+
+async def _got_single_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Day selected in single-select (weekly/biweekly)."""
+    query = update.callback_query
+    if query is None or query.data is None or context.user_data is None:
+        return _ASK_SCHED_DAYS
+    await query.answer()
+    dow = int(query.data.split(":", 1)[1])
+    context.user_data["new_topic_dow"] = dow
+    await query.edit_message_text(f"✓ {_DOW_LABELS[dow]}")
+    return await _ask_time(update, context)
+
+
+def _parse_time(text: str) -> tuple[int, int]:
+    """Parse '9:30', '21', '9am', '9:30pm' → (hour, minute). Defaults to 9:00."""
+    t = text.strip().lower().replace(".", ":").replace("h", ":")
+    pm = t.endswith("pm")
+    am = t.endswith("am")
+    t = t.removesuffix("pm").removesuffix("am").strip()
+    try:
+        if ":" in t:
+            h_str, _, m_str = t.partition(":")
+            h, m = int(h_str), int(m_str[:2] or "0")
+        else:
+            h, m = int(t), 0
+        if pm and h != 12:
+            h += 12
+        elif am and h == 12:
+            h = 0
+        return h % 24, min(m, 59)
+    except ValueError:
+        return 9, 0
+
+
+async def _ask_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _reply(
+        update,
+        "What time? Type it, e.g. *9:00* or *21:30*\n(your local time, 24-hour or am/pm)",
+        parse_mode="Markdown",
+    )
+    return _ASK_TIME
+
+
+async def _got_time_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message is None or not update.message.text or context.user_data is None:
+        return _ASK_TIME
+    h, m = _parse_time(update.message.text)
+    context.user_data["new_topic_hour"] = h
+    context.user_data["new_topic_minute"] = m
+    await update.message.reply_text(f"✓ {h:02d}:{m:02d}")
+
+    if context.user_data.get("sched_mode") == "update":
+        return await _update_schedule(update, context)
     return await _ask_tz(update, context)
+
+
+async def _update_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Finalize a schedule edit (from /schedule)."""
+    ud = context.user_data
+    if ud is None:
+        return ConversationHandler.END
+    from uuid import UUID
+
+    topic_id = UUID(ud.pop("sched_topic_id", ""))
+    tg = update.effective_user
+    if tg is None:
+        return ConversationHandler.END
+    topic = await store.get_topic(tg.id, topic_id)
+    if topic is None:
+        if update.message:
+            await update.message.reply_text("Topic not found.")
+        return ConversationHandler.END
+
+    freq = ud.pop("new_topic_freq", "daily")
+    hour = ud.pop("new_topic_hour", 8)
+    minute = ud.pop("new_topic_minute", 0)
+    dow = ud.pop("new_topic_dow", topic.send_dow)
+    schedule_days = ud.pop("new_topic_schedule_days", "")
+    ud.pop("sched_mode", None)
+    ud.pop("sched_days_mode", None)
+    ud.pop("selected_days", None)
+
+    await store.update_topic(
+        topic_id,
+        frequency=freq,
+        send_hour=hour,
+        send_minute=minute,
+        send_dow=dow,
+        schedule_days=schedule_days,
+    )
+    label = _sched_label_data(freq, hour, minute, dow, schedule_days, topic.timezone)
+    msg = f"✓ Schedule updated for *{_short(topic.name)}*:\n{label}"
+    if update.message:
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    return ConversationHandler.END
+
+
+# ---------------------------------------------------------------------------
+# Timezone step (add_topic only)
+# ---------------------------------------------------------------------------
 
 
 async def _ask_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -253,15 +529,14 @@ async def _ask_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[6:9]],
         [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[9:]],
     ]
-    msg = "What's your timezone?"
-    if update.callback_query and update.callback_query.message:
-        from telegram import Message as TGMessage
-
-        cq_msg = update.callback_query.message
-        if isinstance(cq_msg, TGMessage):
-            await cq_msg.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
-    elif update.message:
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
+    await _reply(
+        update,
+        "What's your timezone?\n\n"
+        "_Note: Telegram can't read your device timezone. "
+        "Use /timezone to update it when you travel._",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode="Markdown",
+    )
     return _ASK_TZ
 
 
@@ -274,69 +549,12 @@ async def _got_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["new_topic_tz"] = tz
     label = next((lbl for lbl, z in _TIMEZONES if z == tz), tz)
     await query.edit_message_text(f"✓ {label}")
-    return await _ask_time(update, context)
-
-
-async def _ask_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    rows = [
-        [InlineKeyboardButton(f"{h}:00", callback_data=f"time:{h}") for h in _TIME_OPTIONS[:4]],
-        [InlineKeyboardButton(f"{h}:00", callback_data=f"time:{h}") for h in _TIME_OPTIONS[4:]],
-    ]
-    msg = "What time (your local time)?"
-    if update.callback_query and update.callback_query.message:
-        from telegram import Message as TGMessage
-
-        cq_msg = update.callback_query.message
-        if isinstance(cq_msg, TGMessage):
-            await cq_msg.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
-    elif update.message:
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
-    return _ASK_TIME
-
-
-async def _got_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    if query is None or context.user_data is None:
-        return _ASK_TIME
-    await query.answer()
-    hour = int(query.data.split(":")[1]) if query.data else 8
-    context.user_data["new_topic_hour"] = hour
-    await query.edit_message_text(f"✓ {hour}:00")
-    freq = context.user_data.get("new_topic_freq", "daily")
-    if freq == "weekly":
-        return await _ask_day(update, context)
     return await _ask_sources(update, context)
 
 
-async def _ask_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    rows = [
-        [InlineKeyboardButton(d, callback_data=f"dow:{i}") for i, d in enumerate(_DOW_LABELS[:4])],
-        [
-            InlineKeyboardButton(d, callback_data=f"dow:{i + 4}")
-            for i, d in enumerate(_DOW_LABELS[4:])
-        ],  # noqa: E501
-    ]
-    msg = "Which day of the week?"
-    if update.callback_query and update.callback_query.message:
-        from telegram import Message as TGMessage
-
-        cq_msg = update.callback_query.message
-        if isinstance(cq_msg, TGMessage):
-            await cq_msg.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
-    elif update.message:
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
-    return _ASK_DAY
-
-
-async def _got_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    if query is None or context.user_data is None:
-        return _ASK_DAY
-    await query.answer()
-    dow = int(query.data.split(":")[1]) if query.data else 0
-    context.user_data["new_topic_dow"] = dow
-    await query.edit_message_text(f"✓ {_DOW_LABELS[dow]}")
-    return await _ask_sources(update, context)
+# ---------------------------------------------------------------------------
+# Sources step (add_topic only)
+# ---------------------------------------------------------------------------
 
 
 async def _ask_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -345,20 +563,13 @@ async def _ask_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         "(e.g. *BBC, TASS, Al Jazeera*) or tap Skip."
     )
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Skip", callback_data="sources:skip")]])
-    if update.callback_query and update.callback_query.message:
-        from telegram import Message as TGMessage
-
-        cq_msg = update.callback_query.message
-        if isinstance(cq_msg, TGMessage):
-            await cq_msg.reply_text(msg, reply_markup=keyboard, parse_mode="Markdown")
-    elif update.message:
-        await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="Markdown")
-    return _ASK_SOURCES
+    await _reply(update, msg, reply_markup=keyboard, parse_mode="Markdown")
+    return _AT_SOURCES
 
 
 async def _got_sources_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None or not update.message.text:
-        return _ASK_SOURCES
+        return _AT_SOURCES
     raw = update.message.text.strip()
     sources = [s.strip() for s in raw.split(",") if s.strip()]
     return await _create_topic(update, context, sources)
@@ -378,12 +589,19 @@ async def _create_topic(
     tg = update.effective_user
     if tg is None or context.user_data is None:
         return ConversationHandler.END
-    name = context.user_data.pop("new_topic_name", "")
-    desc = context.user_data.pop("new_topic_desc", None)
-    freq = context.user_data.pop("new_topic_freq", "daily")
-    hour = context.user_data.pop("new_topic_hour", 8)
-    dow = context.user_data.pop("new_topic_dow", 0)
-    tz = context.user_data.pop("new_topic_tz", "UTC")
+    ud = context.user_data
+    name = ud.pop("new_topic_name", "")
+    desc = ud.pop("new_topic_desc", None)
+    freq = ud.pop("new_topic_freq", "daily")
+    hour = ud.pop("new_topic_hour", 8)
+    minute = ud.pop("new_topic_minute", 0)
+    dow = ud.pop("new_topic_dow", 0)
+    schedule_days = ud.pop("new_topic_schedule_days", "")
+    tz = ud.pop("new_topic_tz", "UTC")
+    ud.pop("sched_mode", None)
+    ud.pop("sched_days_mode", None)
+    ud.pop("selected_days", None)
+
     topic = await store.create_topic(
         tg.id,
         name=name,
@@ -391,16 +609,16 @@ async def _create_topic(
         sources=sources,
         frequency=freq,
         send_hour=hour,
+        send_minute=minute,
         send_dow=dow,
+        schedule_days=schedule_days,
         timezone=tz,
     )
-    freq_label = _FREQ_LABELS.get(freq, freq)
+    label = _sched_label_data(freq, hour, minute, dow, schedule_days, tz)
     tz_label = next((lbl for lbl, z in _TIMEZONES if z == tz), tz)
-    time_label = f"{hour}:00 ({tz_label.split()[0]})"
-    day_label = f" · {_DOW_LABELS[dow]}" if freq == "weekly" else ""
     msg = (
         f"✓ *{topic.name}* created.\n"
-        f"{freq_label} · {time_label}{day_label}\n"
+        f"{label}  ·  {tz_label}\n"
         f"Sources: {', '.join(sources) if sources else 'general'}\n\n"
         "Use /check to get a digest right now."
     )
@@ -418,8 +636,14 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "new_topic_desc",
             "new_topic_freq",
             "new_topic_hour",
+            "new_topic_minute",
             "new_topic_dow",
             "new_topic_tz",
+            "new_topic_schedule_days",
+            "sched_mode",
+            "sched_topic_id",
+            "sched_days_mode",
+            "selected_days",
         ):
             context.user_data.pop(key, None)
     if update.message:
@@ -428,7 +652,39 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Topic picker — shared across /check, /pause, /resume, /synthesis
+# Schedule display helpers
+# ---------------------------------------------------------------------------
+
+
+def _sched_label(topic: Topic) -> str:
+    """Short human-readable schedule for /topics list: 'Mon/Wed/Fri · 09:00'."""
+    return _sched_label_data(
+        topic.frequency,
+        topic.send_hour,
+        topic.send_minute,
+        topic.send_dow,
+        topic.schedule_days,
+        topic.timezone,
+    )
+
+
+def _sched_label_data(
+    freq: str, hour: int, minute: int, dow: int, schedule_days: str, timezone: str
+) -> str:
+    freq_name = _SCHED_TYPE_LABELS.get(freq, freq)
+    if freq in {"weekly", "biweekly"}:
+        freq_name = f"{freq_name} ({_DOW_LABELS[dow]})"
+    elif freq == "custom_days" and schedule_days:
+        freq_name = " / ".join(_DOW_SHORT[int(d)] for d in schedule_days.split(",") if d.strip())
+    tz_short = next((lbl.split()[0] for lbl, z in _TIMEZONES if z == timezone), "")
+    time_str = f"{hour:02d}:{minute:02d}"
+    if tz_short:
+        return f"{freq_name} · {time_str} ({tz_short})"
+    return f"{freq_name} · {time_str}"
+
+
+# ---------------------------------------------------------------------------
+# Topic picker — shared across /check, /pause, /resume, /synthesis, /reset
 # ---------------------------------------------------------------------------
 
 
@@ -519,6 +775,23 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode="Markdown",
         )
 
+    elif action == "set_tz":
+
+        def _tz_btn(lbl: str, zone: str) -> InlineKeyboardButton:
+            return InlineKeyboardButton(lbl, callback_data=f"tzset:{zone}:{topic.id}")
+
+        rows = [
+            [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[:3]],
+            [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[3:6]],
+            [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[6:9]],
+            [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[9:]],
+        ]
+        await query.edit_message_text(
+            f"New timezone for *{_short(topic.name)}*:",
+            reply_markup=InlineKeyboardMarkup(rows),
+            parse_mode="Markdown",
+        )
+
 
 async def on_topic_delete_confirm(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Callback for the delete-confirmation buttons (td:{confirm|cancel}:{topic_id})."""
@@ -547,6 +820,32 @@ async def on_topic_delete_confirm(update: Update, _ctx: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(f"✓ *{_short(topic.name)}* deleted.", parse_mode="Markdown")
 
 
+async def on_tz_set(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback for /timezone timezone buttons (tzset:{zone}:{topic_id})."""
+    query = update.callback_query
+    if query is None or query.from_user is None or query.data is None:
+        return
+    await query.answer()
+
+    parts = query.data.split(":", 2)
+    if len(parts) != 3:
+        return
+    _pfx, zone, topic_id_str = parts
+
+    from uuid import UUID
+
+    topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
+    if topic is None:
+        await query.edit_message_text("Topic not found.")
+        return
+
+    await store.update_topic(topic.id, timezone=zone)
+    label = next((lbl for lbl, z in _TIMEZONES if z == zone), zone)
+    await query.edit_message_text(
+        f"✓ Timezone for *{_short(topic.name)}* → {label}.", parse_mode="Markdown"
+    )
+
+
 # ---------------------------------------------------------------------------
 # /topics
 # ---------------------------------------------------------------------------
@@ -566,14 +865,28 @@ async def cmd_topics(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         return
     lines = ["*Your topics:*\n"]
     for t in topics:
-        status = "⏸ paused" if t.paused else f"▶ {t.frequency.replace('_', ' ')}"
+        status = "⏸ paused" if t.paused else _sched_label(t)
         last = t.last_sent_at.strftime("%d %b %H:%M") if t.last_sent_at else "never"
         lines.append(f"• *{t.name}* — {status} — last sent: {last}")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 # ---------------------------------------------------------------------------
-# /check <name>
+# /timezone — change timezone for a topic
+# ---------------------------------------------------------------------------
+
+
+async def cmd_timezone(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or not await _allowed(update):
+        return
+    tg = update.effective_user
+    if tg is None:
+        return
+    await _topic_picker(update, tg.id, "set_tz", "Update timezone for which topic?")
+
+
+# ---------------------------------------------------------------------------
+# /check
 # ---------------------------------------------------------------------------
 
 
@@ -623,7 +936,7 @@ async def cmd_more(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /reset  — clear seen articles so the next /check fetches fresh content
+# /reset
 # ---------------------------------------------------------------------------
 
 
@@ -650,7 +963,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /rename — give a topic a shorter display name
+# /rename
 # ---------------------------------------------------------------------------
 
 
@@ -689,7 +1002,7 @@ async def cmd_rename(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 # ---------------------------------------------------------------------------
-# /synthesis <name>
+# /synthesis
 # ---------------------------------------------------------------------------
 
 
@@ -784,7 +1097,6 @@ async def cmd_add_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if update.message:
             await update.message.reply_text("Usage: /add_source <topic name> <source>")
         return
-    # Last word is the source, everything before is the topic name
     *name_parts, source = context.args
     name = " ".join(name_parts)
     topic = await store.get_topic_by_name(tg.id, name)
@@ -818,7 +1130,7 @@ async def cmd_del_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 # ---------------------------------------------------------------------------
-# /persona — pin a specific persona to a topic
+# /persona
 # ---------------------------------------------------------------------------
 
 
@@ -889,7 +1201,6 @@ async def on_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if signal == "good":
         await query.edit_message_reply_markup(reply_markup=None)
     else:
-        # Offer extended correction
         if context.user_data is not None:
             context.user_data["awaiting_correction_topic"] = topic_id
         await query.edit_message_reply_markup(reply_markup=None)
@@ -945,6 +1256,8 @@ async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
             BotCommand("check", "Get a digest now: /check <topic>"),
             BotCommand("more", "Full analysis from last digest"),
             BotCommand("synthesis", "Weekly synthesis: /synthesis <topic>"),
+            BotCommand("schedule", "Change when a topic sends: /schedule <topic>"),
+            BotCommand("timezone", "Update timezone for a topic"),
             BotCommand("pause", "Pause updates: /pause <topic>"),
             BotCommand("resume", "Resume updates: /resume <topic>"),
             BotCommand("add_source", "Add a source: /add_source <topic> <source>"),
@@ -965,20 +1278,29 @@ def build_application() -> Application:  # type: ignore[type-arg]
 
     app = ApplicationBuilder().token(token).post_init(_post_init).build()
 
-    add_topic_conv = ConversationHandler(
-        entry_points=[CommandHandler("add_topic", cmd_add_topic)],
+    # One ConversationHandler handles both /add_topic and /schedule
+    topic_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler("add_topic", cmd_add_topic),
+            CommandHandler("schedule", cmd_schedule),
+        ],
         states={
-            _ASK_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, _got_desc)],
-            _ASK_NAME_CONFIRM: [
+            _AT_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, _got_desc)],
+            _AT_NAME_CONFIRM: [
                 CallbackQueryHandler(_name_confirmed, pattern=r"^name:ok"),
                 CallbackQueryHandler(_name_rename_prompt, pattern=r"^name:rename"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _got_custom_name),
             ],
-            _ASK_FREQ: [CallbackQueryHandler(_got_freq, pattern=r"^freq:")],
+            _SC_PICK: [CallbackQueryHandler(_sc_got_topic, pattern=r"^sc_pick:")],
+            _ASK_SCHED_TYPE: [CallbackQueryHandler(_got_sched_type, pattern=r"^sched:")],
+            _ASK_SCHED_DAYS: [
+                CallbackQueryHandler(_toggle_day, pattern=r"^day_toggle:"),
+                CallbackQueryHandler(_done_days, pattern=r"^day_done$"),
+                CallbackQueryHandler(_got_single_day, pattern=r"^dow_single:"),
+            ],
+            _ASK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, _got_time_text)],
             _ASK_TZ: [CallbackQueryHandler(_got_tz, pattern=r"^tz:")],
-            _ASK_TIME: [CallbackQueryHandler(_got_time, pattern=r"^time:")],
-            _ASK_DAY: [CallbackQueryHandler(_got_day, pattern=r"^dow:")],
-            _ASK_SOURCES: [
+            _AT_SOURCES: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _got_sources_text),
                 CallbackQueryHandler(_got_sources_skip, pattern=r"^sources:skip"),
             ],
@@ -987,12 +1309,13 @@ def build_application() -> Application:  # type: ignore[type-arg]
         per_message=False,
     )
 
-    app.add_handler(add_topic_conv)
+    app.add_handler(topic_conv)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("topics", cmd_topics))
     app.add_handler(CommandHandler("check", cmd_check))
     app.add_handler(CommandHandler("more", cmd_more))
     app.add_handler(CommandHandler("synthesis", cmd_synthesis))
+    app.add_handler(CommandHandler("timezone", cmd_timezone))
     app.add_handler(CommandHandler("pause", cmd_pause))
     app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CommandHandler("add_source", cmd_add_source))
@@ -1003,6 +1326,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CommandHandler("delete_topic", cmd_delete_topic))
     app.add_handler(CallbackQueryHandler(on_topic_action, pattern=r"^ta:"))
     app.add_handler(CallbackQueryHandler(on_topic_delete_confirm, pattern=r"^td:"))
+    app.add_handler(CallbackQueryHandler(on_tz_set, pattern=r"^tzset:"))
     app.add_handler(CallbackQueryHandler(on_feedback, pattern=r"^fb:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 

@@ -72,21 +72,43 @@ def is_due(topic: Topic, now_local: datetime) -> bool:
     if now_local.hour not in due_hours:
         return False
 
+    # Day-of-week checks run before the last_sent_at guard so they also apply
+    # to topics that have never been sent (last_sent_at is None).
+    match topic.frequency:
+        case "weekdays":
+            if now_local.weekday() > 4:  # Sat=5, Sun=6
+                return False
+        case "mwf":
+            if now_local.weekday() not in {0, 2, 4}:
+                return False
+        case "tuth":
+            if now_local.weekday() not in {1, 3}:
+                return False
+        case "custom_days":
+            if not topic.schedule_days:
+                return False
+            days = {int(d) for d in topic.schedule_days.split(",") if d.strip()}
+            if now_local.weekday() not in days:
+                return False
+        case "weekly" | "biweekly":
+            if now_local.weekday() != topic.send_dow:
+                return False
+
     if topic.last_sent_at is None:
         return True
 
     last = topic.last_sent_at.astimezone(ZoneInfo(topic.timezone))
 
     match topic.frequency:
-        case "daily":
+        case "daily" | "weekdays" | "mwf" | "tuth" | "custom_days":
             return last.date() < now_local.date()
         case "twice_daily":
             # 10h buffer avoids double-sending on clock-edge ticks
             return (now_local - last).total_seconds() >= 10 * 3600
         case "weekly":
-            return (
-                now_local.weekday() == topic.send_dow and (now_local.date() - last.date()).days >= 7
-            )
+            return (now_local.date() - last.date()).days >= 7
+        case "biweekly":
+            return (now_local.date() - last.date()).days >= 14
         case _:
             return False
 

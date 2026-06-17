@@ -24,7 +24,12 @@ from disputatio.models import Article, Topic
 _LOOKBACK: dict[str, str] = {
     "daily": "48 hours",
     "twice_daily": "24 hours",
+    "weekdays": "48 hours",
+    "mwf": "72 hours",
+    "tuth": "72 hours",
+    "custom_days": "72 hours",
     "weekly": "7 days",
+    "biweekly": "14 days",
 }
 
 
