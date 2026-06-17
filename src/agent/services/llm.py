@@ -101,16 +101,29 @@ class Research(BaseModel):
     sources: list[Source] = Field(default_factory=list)
 
 
-async def research(query: str, *, model: str | None = None) -> Research:
+async def research(
+    query: str,
+    *,
+    model: str | None = None,
+    search_after_date: str | None = None,
+) -> Research:
     """Web-grounded research via Perplexity Sonar — returns the answer AND its sources.
 
     We call OpenRouter directly here (not via a pydantic-ai Agent) because the
     Agent abstracts away the per-source citation links, which we want to show.
     Citations come back in `message.annotations` as url_citation entries.
+
+    search_after_date: "MM/DD/YYYY" — passed to Perplexity's search_after_date_filter
+      to restrict results at the API level (not just via prompt instructions).
     """
     messages: list[Any] = [{"role": "user", "content": query}]
+    extra: dict[str, Any] = {}
+    if search_after_date:
+        extra["search_after_date_filter"] = search_after_date
     completion = await _client().chat.completions.create(
-        model=model or TIERS["research"], messages=messages
+        model=model or TIERS["research"],
+        messages=messages,
+        extra_body=extra if extra else None,
     )
     message = completion.model_dump()["choices"][0]["message"]
     sources: list[Source] = []

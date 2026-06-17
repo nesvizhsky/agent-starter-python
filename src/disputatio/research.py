@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 from loguru import logger
@@ -163,15 +163,30 @@ async def gather(topic: Topic) -> list[Article]:
     return articles
 
 
+def _cutoff_date(lookback: str) -> str:
+    """Compute the API-level search cutoff date from a lookback string like '7 days' or '48 hours'.
+
+    Returns a date in "MM/DD/YYYY" format for Perplexity's search_after_date_filter.
+    """
+    parts = lookback.split()
+    n = int(parts[0])
+    unit = parts[1] if len(parts) > 1 else "days"
+    days = max(1, n // 24) if "hour" in unit else n
+    dt = datetime.now(UTC) - timedelta(days=days)
+    return dt.strftime("%m/%d/%Y")
+
+
 async def _query_source(topic_name: str, source: str, lookback: str, today: str) -> list[Article]:
+    cutoff = _cutoff_date(lookback)
     query = (
-        f"Today is {today}. What specifically happened with {topic_name!r} according to {source} "
+        f"Today is {today}. Only include articles published after {cutoff}. "
+        f"What specifically happened with {topic_name!r} according to {source} "
         f"in the last {lookback}? "
-        f"Only include events that occurred within this window — not older background or context. "
-        f"List concrete recent events, statements, or decisions and cite specific article headlines."  # noqa: E501
+        f"Do not include older background or historical context — only concrete recent events, "
+        f"statements, or decisions. Cite specific article headlines."
     )
     try:
-        result = await _research(query)
+        result = await _research(query, search_after_date=cutoff)
     except Exception:
         logger.exception("_research() call failed for source {!r}", source)
         return []
@@ -236,14 +251,16 @@ async def generate_source_guidance(description: str, topic_name: str) -> str:
 async def _query_general(
     topic_name: str, lookback: str, today: str, source_instr: str
 ) -> list[Article]:
+    cutoff = _cutoff_date(lookback)
     query = (
-        f"Today is {today}. What specifically happened with {topic_name!r} in the last {lookback}? "
-        f"Only include events from this time window — not older background or context. "
-        f"List concrete recent events, decisions, or developments from multiple perspectives. "
+        f"Today is {today}. Only include articles published after {cutoff}. "
+        f"What specifically happened with {topic_name!r} in the last {lookback}? "
+        f"Do not include older background or historical context — only concrete recent events, "
+        f"decisions, or developments from multiple perspectives. "
         f"{source_instr}"
     )
     try:
-        result = await _research(query)
+        result = await _research(query, search_after_date=cutoff)
     except Exception:
         logger.exception("_research() general call failed for topic {!r}", topic_name)
         return []
