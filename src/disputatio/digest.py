@@ -77,7 +77,7 @@ def _system_prompt(ctx: RunContext[_Deps]) -> str:
         "CHARACTER VOICE — stay in this throughout:\n"
         f"{ctx.deps.voice}\n\n"
         "FORMAT for main — Telegram HTML only:\n"
-        "<b>📌 [what specifically happened — one concrete event]</b>\n"
+        "<b>📌 [sentence-case headline]</b> <i>· Jun 17</i>  ← include date if known, omit if not\n"
         "[One sentence: the key fact. What, who, where.]\n"
         '• <a href="URL"><i>Source A</i></a> — [what they specifically said/claimed]\n'
         '• <a href="URL"><i>Source B</i></a> — [their framing] 🚩 <i>state framing</i>\n'
@@ -89,13 +89,16 @@ def _system_prompt(ctx: RunContext[_Deps]) -> str:
         "For character_note: 2-3 sentences purely in your persona's voice — "
         "your take on what today's pattern reveals. This is your character moment.\n\n"
         "RULES:\n"
-        "1. Only cover events that SPECIFICALLY HAPPENED — new facts, not the general "
+        "1. Headlines MUST be sentence case: lowercase except the first word and proper nouns. "
+        "'Russia tightens small-business taxes to fund the war' ✓  "
+        "'Russian Economic Policy Update' ✗\n"
+        "2. Present stories in the order given — most important (importance=1) first.\n"
+        "3. Only cover events that SPECIFICALLY HAPPENED — new facts, not the general "
         "state of affairs. 'Russia's invasion continues' is not a story.\n"
-        "2. Lead with the event, not the source. Sources are bullets, not the subject.\n"
-        "3. Every bullet must state what that source specifically claimed — not that "
-        "they 'covered' something.\n"
-        "4. 250 words max in main. Depth in overflow.\n"
-        "5. If nothing genuinely new happened, say so — in character, very briefly."
+        "4. Lead with the event, not the source. Sources are bullets, not the subject.\n"
+        "5. Every bullet must state what that source specifically claimed.\n"
+        "6. 250 words max in main. Depth in overflow.\n"
+        "7. If nothing genuinely new happened, say so — in character, very briefly."
         f"{notes_block}"
     )
 
@@ -133,9 +136,12 @@ _NO_NEWS_PROMPT = (
 
 def _format_prompt(stories: list[Story]) -> str:
     noun = "story" if len(stories) == 1 else "stories"
-    lines = [f"Write a digest covering these {len(stories)} {noun}:\n"]
+    lines = [
+        f"Write a digest covering these {len(stories)} {noun} (already sorted by importance):\n"
+    ]  # noqa: E501
     for i, story in enumerate(stories, 1):
-        lines.append(f"## Story {i}: {story.headline}")
+        date_str = f" | Date: {story.event_date}" if story.event_date else ""
+        lines.append(f"## Story {i} [importance={story.importance}]: {story.headline}{date_str}")
         for view in story.source_views:
             lines.append(f"\nSource: {view.source} | URL: {view.url}")
             lines.append(f"Says: {view.summary}")

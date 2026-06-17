@@ -219,7 +219,8 @@ async def _run_digest(topic: Topic, bot: Bot) -> None:
         logger.info("nothing new for {!r} — skipping", topic.name)
         return
 
-    stories = await perspectives.cluster(fresh, topic_name=topic.name)
+    lookback = research._LOOKBACK.get(topic.frequency, "48 hours")
+    stories = await perspectives.cluster(fresh, topic_name=topic.name, lookback=lookback)
     stories = await propaganda.analyze(stories)
     persona = pick(topic.pinned_persona)
     output = await digest.generate(stories, persona, topic.feedback_notes)

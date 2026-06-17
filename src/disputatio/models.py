@@ -62,7 +62,29 @@ class SourceView(BaseModel):
 class Story(BaseModel):
     """One real-world event covered from multiple source perspectives."""
 
-    headline: str  # neutral description of the event
+    headline: str = Field(
+        description=(
+            "Sentence-case headline (lowercase except first word and proper nouns). "
+            "Must tell the reader what specifically happened — not a category label. "
+            "Good: 'Russia tightens small-business taxes to fund the war' "
+            "Bad: 'Russian Economic Policy Changes'"
+        )
+    )
+    event_date: str | None = Field(
+        default=None,
+        description=(
+            "Approximate date of the event, extracted from research context. "
+            "Format: 'Jun 15' or 'June 17, 2026'. None if genuinely unknown."
+        ),
+    )
+    importance: int = Field(
+        default=2,
+        description=(
+            "1 = concrete breaking event (attack, arrest, vote, launch, death, signed deal). "
+            "2 = development or trend (economic data, ongoing operation, social shift). "
+            "3 = analysis, report, anniversary, or background context."
+        ),
+    )
     source_views: list[SourceView]
 
 

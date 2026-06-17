@@ -12,6 +12,7 @@ not surface reliably. Direct-URL fetching is v2 scope.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 from loguru import logger
@@ -40,8 +41,9 @@ async def gather(topic: Topic) -> list[Article]:
     # Use description as the research query when set — it's the user's detailed focus.
     # Fall back to name so the short label still produces sensible results.
     query_subject = topic.description or topic.name
-    coros = [_query_source(query_subject, src, lookback) for src in active]
-    coros.append(_query_general(query_subject, lookback))
+    today = datetime.now(UTC).strftime("%B %d, %Y")
+    coros = [_query_source(query_subject, src, lookback, today) for src in active]
+    coros.append(_query_general(query_subject, lookback, today))
 
     raw = await asyncio.gather(*coros, return_exceptions=True)
 
@@ -67,12 +69,12 @@ async def gather(topic: Topic) -> list[Article]:
     return articles
 
 
-async def _query_source(topic_name: str, source: str, lookback: str) -> list[Article]:
+async def _query_source(topic_name: str, source: str, lookback: str, today: str) -> list[Article]:
     query = (
-        f"What specifically happened with {topic_name!r} according to {source} "
+        f"Today is {today}. What specifically happened with {topic_name!r} according to {source} "
         f"in the last {lookback}? "
-        f"List concrete events, statements, or decisions — not background or context. "
-        f"Cite specific article headlines."
+        f"Only include events that occurred within this window — not older background or context. "
+        f"List concrete recent events, statements, or decisions and cite specific article headlines."  # noqa: E501
     )
     try:
         result = await _research(query)
@@ -82,11 +84,11 @@ async def _query_source(topic_name: str, source: str, lookback: str) -> list[Art
     return _parse(result, default_source=source)
 
 
-async def _query_general(topic_name: str, lookback: str) -> list[Article]:
+async def _query_general(topic_name: str, lookback: str, today: str) -> list[Article]:
     query = (
-        f"What specifically happened with {topic_name!r} in the last {lookback}? "
-        f"List concrete events, decisions, or new developments from multiple sources. "
-        f"Focus only on what is NEW — not background or the general state of affairs. "
+        f"Today is {today}. What specifically happened with {topic_name!r} in the last {lookback}? "
+        f"Only include events from this time window — not older background or context. "
+        f"List concrete recent events, decisions, or developments from multiple sources. "
         f"Include a range of viewpoints and cite specific articles."
     )
     try:
