@@ -155,6 +155,7 @@ _WELCOME = (
     "*Settings*\n"
     "/schedule — change when a topic sends\n"
     "/timezone — update timezone for a topic\n"
+    "/describe — fix what the LLM actually searches for\n"
     "/pause — pause a topic\n"
     "/resume — resume a topic\n"
     "/add\\_source — add a source to a topic\n"
@@ -869,8 +870,14 @@ async def cmd_topics(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     for t in topics:
         status = "⏸ paused" if t.paused else _sched_label(t)
         last = t.last_sent_at.strftime("%d %b %H:%M") if t.last_sent_at else "never"
-        lines.append(f"• *{t.name}* — {status} — last sent: {last}")
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        # Show what the LLM actually searches for — this is the research query focus
+        query_text = t.description or t.name
+        lines.append(
+            f"📌 *{t.name}*\n"
+            f"_{query_text}_\n"
+            f"{status} · last sent: {last}"
+        )
+    await update.message.reply_text("\n\n".join(lines), parse_mode="Markdown")
 
 
 # ---------------------------------------------------------------------------
@@ -1001,6 +1008,43 @@ async def cmd_rename(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         updates["description"] = topic.name
     await store.update_topic(topic.id, **updates)
     await update.message.reply_text(f"✓ Renamed to *{new_name}*.", parse_mode="Markdown")
+
+
+# ---------------------------------------------------------------------------
+# /describe — update what the LLM searches for
+# ---------------------------------------------------------------------------
+
+
+async def cmd_describe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or not await _allowed(update):
+        return
+    tg = update.effective_user
+    if tg is None:
+        return
+    args = context.args or []
+    raw = " ".join(args)
+    if "|" not in raw:
+        await update.message.reply_text(
+            "Usage: /describe <topic name> | <new research focus>\n\n"
+            "Example: /describe Ecology | international laws on biodiversity, "
+            "endangered species, and plastic pollution since 2024",
+            parse_mode="Markdown",
+        )
+        return
+    topic_name, new_desc = (p.strip() for p in raw.split("|", 1))
+    if not new_desc:
+        await update.message.reply_text("Please provide a description after the `|`.")
+        return
+    topic = await store.get_topic_by_name(tg.id, topic_name)
+    if topic is None:
+        await update.message.reply_text(f"No topic called *{topic_name}*.", parse_mode="Markdown")
+        return
+    await store.update_topic(topic.id, description=new_desc)
+    await update.message.reply_text(
+        f"✓ *{topic.name}* will now research:\n_{new_desc}_\n\n"
+        "Use /reset then /check to fetch fresh results with the new focus.",
+        parse_mode="Markdown",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1267,6 +1311,7 @@ async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
             BotCommand("persona", "Pin a persona: /persona <topic> <key>"),
             BotCommand("reset", "Clear seen articles: /reset <topic>"),
             BotCommand("rename", "Rename a topic: /rename <old> | <new>"),
+            BotCommand("describe", "Fix the research focus: /describe <topic> | <text>"),
             BotCommand("delete_topic", "Delete a topic and all its history"),
         ]
     )
@@ -1325,6 +1370,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CommandHandler("persona", cmd_persona))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("rename", cmd_rename))
+    app.add_handler(CommandHandler("describe", cmd_describe))
     app.add_handler(CommandHandler("delete_topic", cmd_delete_topic))
     app.add_handler(CallbackQueryHandler(on_topic_action, pattern=r"^ta:"))
     app.add_handler(CallbackQueryHandler(on_topic_delete_confirm, pattern=r"^td:"))
