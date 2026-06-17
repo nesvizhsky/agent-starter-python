@@ -935,9 +935,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         InlineKeyboardButton(
                             "Yes, delete", callback_data=f"tp:del_confirm:{topic.id}"
                         ),
-                        InlineKeyboardButton(
-                            "Cancel", callback_data=f"tp:del_cancel:{topic.id}"
-                        ),
+                        InlineKeyboardButton("Cancel", callback_data=f"tp:del_cancel:{topic.id}"),
                     ]
                 ]
             ),
@@ -959,17 +957,16 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ---------------------------------------------------------------------------
 
 
-# Braille blanks (U+2800) are invisible but not stripped by Telegram — appending
-# them forces the message bubble to full screen width so buttons span the full row.
-_FILL = "⠀" * 36
-
-
 def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
-    """Build the text + action keyboard for one topic card."""
+    """Build the text + action keyboard for one topic card.
+
+    Description, schedule, and last-sent are combined on one long italic line so
+    the message bubble always fills screen width — keeping buttons uniformly wide.
+    """
     query_text = t.description or t.name
     status = "⏸ paused" if t.paused else _sched_label(t)
-    last = t.last_sent_at.strftime("%d %b") if t.last_sent_at else "never"
-    text = f"📌 *{t.name}*\n_{query_text}_\n{status} · {last}\n{_FILL}"
+    last = t.last_sent_at.strftime("%d %b") if t.last_sent_at else "never sent"
+    text = f"📌 *{t.name}*\n_{query_text}  ·  {status}  ·  {last}_"
 
     tid = str(t.id)
     pause_lbl = "▶ Resume" if t.paused else "⏸ Pause"
@@ -983,13 +980,13 @@ def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
             ],
             [
                 InlineKeyboardButton("✏️ Rename", callback_data=f"tp:rename:{tid}"),
-                InlineKeyboardButton("📝 Research focus", callback_data=f"tp:describe:{tid}"),
+                InlineKeyboardButton("📝 Focus", callback_data=f"tp:describe:{tid}"),
             ],
             [
-                InlineKeyboardButton("📅 Schedule", callback_data=f"tp:schedule:{tid}"),
+                InlineKeyboardButton("📅 Sched", callback_data=f"tp:schedule:{tid}"),
                 InlineKeyboardButton("🔄 Reset", callback_data=f"tp:reset:{tid}"),
+                InlineKeyboardButton("🗑 Del", callback_data=f"tp:delete:{tid}"),
             ],
-            [InlineKeyboardButton("🗑 Delete", callback_data=f"tp:delete:{tid}")],
         ]
     )
     return text, keyboard
@@ -1400,8 +1397,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ud = context.user_data
 
     if text.lower() == "/cancel" and ud is not None:
-        for key in ("awaiting_rename_id", "awaiting_rename_name",
-                    "awaiting_describe_id", "awaiting_describe_name"):
+        for key in (
+            "awaiting_rename_id",
+            "awaiting_rename_name",
+            "awaiting_describe_id",
+            "awaiting_describe_name",
+        ):
             ud.pop(key, None)
         await update.message.reply_text("Cancelled.")
         return
