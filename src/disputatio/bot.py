@@ -353,6 +353,47 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode="Markdown",
         )
 
+    elif action == "delete":
+        await query.edit_message_text(
+            f"Delete *{_short(topic.name)}*?\n\nThis removes the topic and all its history.",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton("Yes, delete", callback_data=f"td:confirm:{topic.id}"),
+                        InlineKeyboardButton("Cancel", callback_data=f"td:cancel:{topic.id}"),
+                    ]
+                ]
+            ),
+            parse_mode="Markdown",
+        )
+
+
+async def on_topic_delete_confirm(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback for the delete-confirmation buttons (td:{confirm|cancel}:{topic_id})."""
+    query = update.callback_query
+    if query is None or query.from_user is None or query.data is None:
+        return
+    await query.answer()
+
+    parts = query.data.split(":", 2)
+    if len(parts) != 3:
+        return
+    _prefix, action, topic_id_str = parts
+
+    from uuid import UUID
+
+    if action == "cancel":
+        await query.edit_message_text("Cancelled.")
+        return
+
+    topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
+    if topic is None:
+        await query.edit_message_text("Topic not found.")
+        return
+
+    await store.delete_topic(topic.id)
+    await query.edit_message_text(f"✓ *{_short(topic.name)}* deleted.", parse_mode="Markdown")
+
 
 # ---------------------------------------------------------------------------
 # /topics
@@ -565,6 +606,20 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 # ---------------------------------------------------------------------------
+# /delete_topic
+# ---------------------------------------------------------------------------
+
+
+async def cmd_delete_topic(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or not await _allowed(update):
+        return
+    tg = update.effective_user
+    if tg is None:
+        return
+    await _topic_picker(update, tg.id, "delete", "Which topic do you want to delete?")
+
+
+# ---------------------------------------------------------------------------
 # /add_source and /del_source
 # ---------------------------------------------------------------------------
 
@@ -745,6 +800,7 @@ async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
             BotCommand("persona", "Pin a persona: /persona <topic> <key>"),
             BotCommand("reset", "Clear seen articles: /reset <topic>"),
             BotCommand("rename", "Rename a topic: /rename <old> | <new>"),
+            BotCommand("delete_topic", "Delete a topic and all its history"),
         ]
     )
 
@@ -789,7 +845,9 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CommandHandler("persona", cmd_persona))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("rename", cmd_rename))
+    app.add_handler(CommandHandler("delete_topic", cmd_delete_topic))
     app.add_handler(CallbackQueryHandler(on_topic_action, pattern=r"^ta:"))
+    app.add_handler(CallbackQueryHandler(on_topic_delete_confirm, pattern=r"^td:"))
     app.add_handler(CallbackQueryHandler(on_feedback, pattern=r"^fb:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 

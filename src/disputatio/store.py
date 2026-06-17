@@ -332,3 +332,11 @@ async def append_feedback_note(topic_id: UUID, note: str) -> None:
         topic_id,
         note,
     )
+
+
+async def delete_topic(topic_id: UUID) -> None:
+    """Delete a topic and all its associated data."""
+    await db.execute("DELETE FROM disputatio_feedback WHERE topic_id = $1", topic_id)
+    await db.execute("DELETE FROM disputatio_digests WHERE topic_id = $1", topic_id)
+    await db.execute("DELETE FROM disputatio_seen WHERE topic_id = $1", topic_id)
+    await db.execute("DELETE FROM disputatio_topics WHERE id = $1", topic_id)
