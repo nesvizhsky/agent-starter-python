@@ -25,6 +25,7 @@ _UPDATABLE_TOPIC_FIELDS = frozenset(
         "description",
         "frequency",
         "send_hour",
+        "send_dow",
         "timezone",
         "paused",
         "sources",
@@ -122,6 +123,7 @@ async def create_topic(
     name: str,
     frequency: str = "daily",
     send_hour: int = 8,
+    send_dow: int = 0,
     timezone: str = "UTC",
     sources: list[str],
     description: str | None = None,
@@ -129,8 +131,8 @@ async def create_topic(
     row = await db.fetchrow(
         """
         INSERT INTO disputatio_topics
-            (telegram_id, name, description, frequency, send_hour, timezone, sources)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+            (telegram_id, name, description, frequency, send_hour, send_dow, timezone, sources)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
         """,
         telegram_id,
@@ -138,6 +140,7 @@ async def create_topic(
         description,
         frequency,
         send_hour,
+        send_dow,
         timezone,
         sources,
     )

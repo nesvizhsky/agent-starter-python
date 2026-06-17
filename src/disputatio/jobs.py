@@ -84,7 +84,9 @@ def is_due(topic: Topic, now_local: datetime) -> bool:
             # 10h buffer avoids double-sending on clock-edge ticks
             return (now_local - last).total_seconds() >= 10 * 3600
         case "weekly":
-            return (now_local.date() - last.date()).days >= 7
+            return (
+                now_local.weekday() == topic.send_dow and (now_local.date() - last.date()).days >= 7
+            )
         case _:
             return False
 

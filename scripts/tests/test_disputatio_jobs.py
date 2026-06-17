@@ -30,6 +30,7 @@ def _topic(
         description=None,
         frequency=frequency,
         send_hour=send_hour,
+        send_dow=0,
         timezone=timezone,
         paused=paused,
         sources=[],

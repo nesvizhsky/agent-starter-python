@@ -30,6 +30,7 @@ def _topic(**kwargs: object) -> Topic:
         description=None,
         frequency="daily",
         send_hour=8,
+        send_dow=0,
         timezone="UTC",
         paused=False,
         sources=["BBC", "Reuters"],

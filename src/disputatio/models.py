@@ -27,6 +27,7 @@ class Topic(BaseModel):
     frequency: str  # 'daily' | 'twice_daily' | 'weekly'
     send_hour: int
     timezone: str
+    send_dow: int  # 0=Monday … 6=Sunday; only used when frequency='weekly'
     paused: bool
     sources: list[str]
     excluded_sources: list[str]

@@ -99,3 +99,20 @@ Fix (two parts):
    `DigestOutput.main` field description). At 600 words the expected character count is ~3000,
    giving a real buffer. The chunking is the reliable fix; the word-count tightening reduces
    the chance of hitting it in the first place.
+
+## 2026-06-17 — Auto-name topics; fix research context pipeline
+
+**UX change: `/add_topic` flow reversed.**
+Previously: name first → optional description. Problem: users typed their full description as
+the name (the archaeology topic ended up with a 60-word label). Now: description first → LLM
+(fast tier) generates a 2-4 word name → user confirms with "Continue →" or taps "Rename it"
+to override. The description becomes the research focus (more useful) and the name is short
+(better for display). `/rename` still exists as a fallback.
+
+**Pipeline bug found and fixed: `result.answer` vs `result.text`.**
+The previous session added `context=result.answer` to research.py to give the perspectives
+agent real Perplexity prose — but the `Research` model field is actually `text`, not `answer`.
+So `context` was always None, which meant the perspectives agent had no real content to draw
+on. Fixed to `context=result.text`. Offline tests caught this immediately (AttributeError on
+the mock Research object). Lesson: always run the offline tests before committing pipeline
+changes, even small ones.

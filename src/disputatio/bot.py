@@ -34,7 +34,7 @@ from disputatio.personas import all_keys
 # ConversationHandler states for /add_topic
 # ---------------------------------------------------------------------------
 
-_ASK_DESC, _ASK_NAME_CONFIRM, _ASK_FREQ, _ASK_SOURCES = range(4)
+_ASK_DESC, _ASK_NAME_CONFIRM, _ASK_FREQ, _ASK_TIME, _ASK_DAY, _ASK_SOURCES = range(6)
 
 # ---------------------------------------------------------------------------
 # Name-generation agent (fast + cheap — just makes a 2-4 word label)
@@ -87,16 +87,22 @@ _WELCOME = (
     "I track topics you care about and deliver regular digests showing how different "
     "sources frame the same events — including rhetoric and propaganda signals.\n\n"
     "To get started: /add\\_topic\n\n"
-    "Commands:\n"
+    "*Topics*\n"
     "/add\\_topic — track a new topic\n"
     "/topics — list your topics\n"
+    "/delete\\_topic — delete a topic\n"
+    "/rename — rename a topic\n\n"
+    "*Digests*\n"
     "/check — get a digest right now\n"
-    "/more — read the full analysis from the last digest\n"
-    "/synthesis — weekly synthesis for a topic\n"
+    "/more — full analysis from the last digest\n"
+    "/reset — clear seen articles (fetch fresh)\n"
+    "/synthesis — weekly synthesis\n\n"
+    "*Settings*\n"
     "/pause — pause a topic\n"
     "/resume — resume a topic\n"
     "/add\\_source — add a source to a topic\n"
-    "/del\\_source — remove a source"
+    "/del\\_source — remove a source from a topic\n"
+    "/persona — pin a persona to a topic"
 )
 
 
@@ -183,6 +189,11 @@ async def _got_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return await _ask_freq(update, context)
 
 
+_FREQ_LABELS = {"daily": "Daily", "twice_daily": "Twice daily", "weekly": "Weekly"}
+_DOW_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+_TIME_OPTIONS = [7, 8, 9, 12, 15, 18, 20]  # hours offered as buttons
+
+
 async def _ask_freq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = InlineKeyboardMarkup(
         [
@@ -212,15 +223,86 @@ async def _got_freq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.answer()
     freq = query.data.split(":")[1] if query.data else "daily"
     context.user_data["new_topic_freq"] = freq
-    await query.edit_message_text(
-        f"Frequency: *{freq.replace('_', ' ')}*.\n\n"
+    await query.edit_message_text(f"✓ {_FREQ_LABELS.get(freq, freq)}", parse_mode="Markdown")
+    return await _ask_time(update, context)
+
+
+async def _ask_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    rows = [
+        [InlineKeyboardButton(f"{h}:00", callback_data=f"time:{h}") for h in _TIME_OPTIONS[:4]],
+        [InlineKeyboardButton(f"{h}:00", callback_data=f"time:{h}") for h in _TIME_OPTIONS[4:]],
+    ]
+    msg = "What time? (UTC — e.g. if you're UTC+2, pick 2 hours earlier)"
+    if update.callback_query and update.callback_query.message:
+        from telegram import Message as TGMessage
+
+        cq_msg = update.callback_query.message
+        if isinstance(cq_msg, TGMessage):
+            await cq_msg.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
+    elif update.message:
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
+    return _ASK_TIME
+
+
+async def _got_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or context.user_data is None:
+        return _ASK_TIME
+    await query.answer()
+    hour = int(query.data.split(":")[1]) if query.data else 8
+    context.user_data["new_topic_hour"] = hour
+    await query.edit_message_text(f"✓ {hour}:00 UTC")
+    freq = context.user_data.get("new_topic_freq", "daily")
+    if freq == "weekly":
+        return await _ask_day(update, context)
+    return await _ask_sources(update, context)
+
+
+async def _ask_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    rows = [
+        [InlineKeyboardButton(d, callback_data=f"dow:{i}") for i, d in enumerate(_DOW_LABELS[:4])],
+        [
+            InlineKeyboardButton(d, callback_data=f"dow:{i + 4}")
+            for i, d in enumerate(_DOW_LABELS[4:])
+        ],  # noqa: E501
+    ]
+    msg = "Which day of the week?"
+    if update.callback_query and update.callback_query.message:
+        from telegram import Message as TGMessage
+
+        cq_msg = update.callback_query.message
+        if isinstance(cq_msg, TGMessage):
+            await cq_msg.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
+    elif update.message:
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
+    return _ASK_DAY
+
+
+async def _got_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or context.user_data is None:
+        return _ASK_DAY
+    await query.answer()
+    dow = int(query.data.split(":")[1]) if query.data else 0
+    context.user_data["new_topic_dow"] = dow
+    await query.edit_message_text(f"✓ {_DOW_LABELS[dow]}")
+    return await _ask_sources(update, context)
+
+
+async def _ask_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = (
         "Any specific sources to track? Send a comma-separated list "
-        "(e.g. *BBC, TASS, Al Jazeera*) or tap Skip.",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Skip", callback_data="sources:skip")]]
-        ),
-        parse_mode="Markdown",
+        "(e.g. *BBC, TASS, Al Jazeera*) or tap Skip."
     )
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Skip", callback_data="sources:skip")]])
+    if update.callback_query and update.callback_query.message:
+        from telegram import Message as TGMessage
+
+        cq_msg = update.callback_query.message
+        if isinstance(cq_msg, TGMessage):
+            await cq_msg.reply_text(msg, reply_markup=keyboard, parse_mode="Markdown")
+    elif update.message:
+        await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="Markdown")
     return _ASK_SOURCES
 
 
@@ -249,12 +331,23 @@ async def _create_topic(
     name = context.user_data.pop("new_topic_name", "")
     desc = context.user_data.pop("new_topic_desc", None)
     freq = context.user_data.pop("new_topic_freq", "daily")
+    hour = context.user_data.pop("new_topic_hour", 8)
+    dow = context.user_data.pop("new_topic_dow", 0)
     topic = await store.create_topic(
-        tg.id, name=name, description=desc, sources=sources, frequency=freq
+        tg.id,
+        name=name,
+        description=desc,
+        sources=sources,
+        frequency=freq,
+        send_hour=hour,
+        send_dow=dow,
     )
+    freq_label = _FREQ_LABELS.get(freq, freq)
+    time_label = f"{hour}:00 UTC"
+    day_label = f" · {_DOW_LABELS[dow]}" if freq == "weekly" else ""
     msg = (
-        f"✓ Topic *{topic.name}* created.\n"
-        f"Frequency: {freq.replace('_', ' ')}\n"
+        f"✓ *{topic.name}* created.\n"
+        f"{freq_label} · {time_label}{day_label}\n"
         f"Sources: {', '.join(sources) if sources else 'general'}\n\n"
         "Use /check to get a digest right now."
     )
@@ -267,9 +360,14 @@ async def _create_topic(
 
 async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if context.user_data is not None:
-        context.user_data.pop("new_topic_name", None)
-        context.user_data.pop("new_topic_desc", None)
-        context.user_data.pop("new_topic_freq", None)
+        for key in (
+            "new_topic_name",
+            "new_topic_desc",
+            "new_topic_freq",
+            "new_topic_hour",
+            "new_topic_dow",
+        ):  # noqa: E501
+            context.user_data.pop(key, None)
     if update.message:
         await update.message.reply_text("Cancelled.")
     return ConversationHandler.END
@@ -823,6 +921,8 @@ def build_application() -> Application:  # type: ignore[type-arg]
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _got_custom_name),
             ],
             _ASK_FREQ: [CallbackQueryHandler(_got_freq, pattern=r"^freq:")],
+            _ASK_TIME: [CallbackQueryHandler(_got_time, pattern=r"^time:")],
+            _ASK_DAY: [CallbackQueryHandler(_got_day, pattern=r"^dow:")],
             _ASK_SOURCES: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _got_sources_text),
                 CallbackQueryHandler(_got_sources_skip, pattern=r"^sources:skip"),
