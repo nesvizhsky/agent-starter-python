@@ -963,8 +963,8 @@ def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
     """Build the text + action keyboard for one topic card."""
     query_text = t.description or t.name
     status = "⏸ paused" if t.paused else _sched_label(t)
-    last = t.last_sent_at.strftime("%d %b %H:%M") if t.last_sent_at else "never"
-    text = f"📌 *{t.name}*\n_{query_text}_\n{status} · last: {last}"
+    last = t.last_sent_at.strftime("%d %b") if t.last_sent_at else "never"
+    text = f"📌 *{t.name}*\n_{query_text}_\n{status} · {last}"
 
     tid = str(t.id)
     pause_lbl = "▶ Resume" if t.paused else "⏸ Pause"
@@ -973,18 +973,16 @@ def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
     keyboard = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("▶ Check now", callback_data=f"tp:check:{tid}"),
+                InlineKeyboardButton("▶ Check", callback_data=f"tp:check:{tid}"),
                 InlineKeyboardButton(pause_lbl, callback_data=f"tp:{pause_act}:{tid}"),
-            ],
-            [
-                InlineKeyboardButton("📅 Schedule", callback_data=f"tp:schedule:{tid}"),
-                InlineKeyboardButton("🔄 Reset", callback_data=f"tp:reset:{tid}"),
+                InlineKeyboardButton("📅 Sched", callback_data=f"tp:schedule:{tid}"),
             ],
             [
                 InlineKeyboardButton("✏️ Rename", callback_data=f"tp:rename:{tid}"),
-                InlineKeyboardButton("📝 Research focus", callback_data=f"tp:describe:{tid}"),
+                InlineKeyboardButton("📝 Focus", callback_data=f"tp:describe:{tid}"),
+                InlineKeyboardButton("🔄 Reset", callback_data=f"tp:reset:{tid}"),
+                InlineKeyboardButton("🗑", callback_data=f"tp:delete:{tid}"),
             ],
-            [InlineKeyboardButton("🗑 Delete", callback_data=f"tp:delete:{tid}")],
         ]
     )
     return text, keyboard
