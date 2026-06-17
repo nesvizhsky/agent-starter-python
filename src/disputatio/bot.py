@@ -34,7 +34,7 @@ from disputatio.personas import all_keys
 # ConversationHandler states for /add_topic
 # ---------------------------------------------------------------------------
 
-_ASK_DESC, _ASK_NAME_CONFIRM, _ASK_FREQ, _ASK_TIME, _ASK_DAY, _ASK_SOURCES = range(6)
+_ASK_DESC, _ASK_NAME_CONFIRM, _ASK_FREQ, _ASK_TZ, _ASK_TIME, _ASK_DAY, _ASK_SOURCES = range(7)
 
 # ---------------------------------------------------------------------------
 # Name-generation agent (fast + cheap — just makes a 2-4 word label)
@@ -193,6 +193,22 @@ _FREQ_LABELS = {"daily": "Daily", "twice_daily": "Twice daily", "weekly": "Weekl
 _DOW_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 _TIME_OPTIONS = [7, 8, 9, 12, 15, 18, 20]  # hours offered as buttons
 
+# (display label, IANA timezone name)
+_TIMEZONES = [
+    ("UTC-8  LA", "America/Los_Angeles"),
+    ("UTC-6  Chicago", "America/Chicago"),
+    ("UTC-5  New York", "America/New_York"),
+    ("UTC+0  London", "Europe/London"),
+    ("UTC+1  Paris", "Europe/Paris"),
+    ("UTC+2  Helsinki", "Europe/Helsinki"),
+    ("UTC+3  Moscow", "Europe/Moscow"),
+    ("UTC+4  Dubai", "Asia/Dubai"),
+    ("UTC+5:30  India", "Asia/Kolkata"),
+    ("UTC+8  Singapore", "Asia/Singapore"),
+    ("UTC+9  Tokyo", "Asia/Tokyo"),
+    ("UTC+10  Sydney", "Australia/Sydney"),
+]
+
 
 async def _ask_freq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = InlineKeyboardMarkup(
@@ -224,6 +240,40 @@ async def _got_freq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     freq = query.data.split(":")[1] if query.data else "daily"
     context.user_data["new_topic_freq"] = freq
     await query.edit_message_text(f"✓ {_FREQ_LABELS.get(freq, freq)}", parse_mode="Markdown")
+    return await _ask_tz(update, context)
+
+
+async def _ask_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    def _tz_btn(lbl: str, zone: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(lbl, callback_data=f"tz:{zone}")
+
+    rows = [
+        [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[:3]],
+        [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[3:6]],
+        [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[6:9]],
+        [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[9:]],
+    ]
+    msg = "What's your timezone?"
+    if update.callback_query and update.callback_query.message:
+        from telegram import Message as TGMessage
+
+        cq_msg = update.callback_query.message
+        if isinstance(cq_msg, TGMessage):
+            await cq_msg.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
+    elif update.message:
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
+    return _ASK_TZ
+
+
+async def _got_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or context.user_data is None:
+        return _ASK_TZ
+    await query.answer()
+    tz = query.data.split(":", 1)[1] if query.data else "UTC"
+    context.user_data["new_topic_tz"] = tz
+    label = next((lbl for lbl, z in _TIMEZONES if z == tz), tz)
+    await query.edit_message_text(f"✓ {label}")
     return await _ask_time(update, context)
 
 
@@ -232,7 +282,7 @@ async def _ask_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         [InlineKeyboardButton(f"{h}:00", callback_data=f"time:{h}") for h in _TIME_OPTIONS[:4]],
         [InlineKeyboardButton(f"{h}:00", callback_data=f"time:{h}") for h in _TIME_OPTIONS[4:]],
     ]
-    msg = "What time? (UTC — e.g. if you're UTC+2, pick 2 hours earlier)"
+    msg = "What time (your local time)?"
     if update.callback_query and update.callback_query.message:
         from telegram import Message as TGMessage
 
@@ -251,7 +301,7 @@ async def _got_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.answer()
     hour = int(query.data.split(":")[1]) if query.data else 8
     context.user_data["new_topic_hour"] = hour
-    await query.edit_message_text(f"✓ {hour}:00 UTC")
+    await query.edit_message_text(f"✓ {hour}:00")
     freq = context.user_data.get("new_topic_freq", "daily")
     if freq == "weekly":
         return await _ask_day(update, context)
@@ -333,6 +383,7 @@ async def _create_topic(
     freq = context.user_data.pop("new_topic_freq", "daily")
     hour = context.user_data.pop("new_topic_hour", 8)
     dow = context.user_data.pop("new_topic_dow", 0)
+    tz = context.user_data.pop("new_topic_tz", "UTC")
     topic = await store.create_topic(
         tg.id,
         name=name,
@@ -341,9 +392,11 @@ async def _create_topic(
         frequency=freq,
         send_hour=hour,
         send_dow=dow,
+        timezone=tz,
     )
     freq_label = _FREQ_LABELS.get(freq, freq)
-    time_label = f"{hour}:00 UTC"
+    tz_label = next((lbl for lbl, z in _TIMEZONES if z == tz), tz)
+    time_label = f"{hour}:00 ({tz_label.split()[0]})"
     day_label = f" · {_DOW_LABELS[dow]}" if freq == "weekly" else ""
     msg = (
         f"✓ *{topic.name}* created.\n"
@@ -366,7 +419,8 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "new_topic_freq",
             "new_topic_hour",
             "new_topic_dow",
-        ):  # noqa: E501
+            "new_topic_tz",
+        ):
             context.user_data.pop(key, None)
     if update.message:
         await update.message.reply_text("Cancelled.")
@@ -921,6 +975,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _got_custom_name),
             ],
             _ASK_FREQ: [CallbackQueryHandler(_got_freq, pattern=r"^freq:")],
+            _ASK_TZ: [CallbackQueryHandler(_got_tz, pattern=r"^tz:")],
             _ASK_TIME: [CallbackQueryHandler(_got_time, pattern=r"^time:")],
             _ASK_DAY: [CallbackQueryHandler(_got_day, pattern=r"^dow:")],
             _ASK_SOURCES: [
