@@ -850,8 +850,144 @@ async def on_tz_set(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Topic panel callbacks (tp:{action}:{topic_id})
+# ---------------------------------------------------------------------------
+
+
+async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles all action buttons on a topic card from /topics."""
+    query = update.callback_query
+    if query is None or query.from_user is None or query.data is None:
+        return
+    await query.answer()
+
+    parts = query.data.split(":", 2)
+    if len(parts) != 3:
+        return
+    _, action, topic_id_str = parts
+
+    from uuid import UUID
+
+    topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
+    if topic is None:
+        await query.edit_message_text("Topic not found.")
+        return
+
+    if action == "check":
+        await query.edit_message_text(
+            f"Running digest for *{_short(topic.name)}*…", parse_mode="Markdown"
+        )
+        try:
+            await jobs._run_digest(topic, context.bot)
+        except Exception:  # noqa: BLE001
+            logger.exception("panel /check failed for topic {}", topic.id)
+            await query.message.reply_text("Something went wrong — try again.")  # type: ignore[union-attr]
+
+    elif action in ("pause", "resume"):
+        paused = action == "pause"
+        await store.update_topic(topic.id, paused=paused)
+        updated = await store.get_topic(query.from_user.id, topic.id)
+        if updated:
+            text, keyboard = _topic_card(updated)
+            await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+    elif action == "reset":
+        n = await store.clear_seen(topic.id)
+        text, keyboard = _topic_card(topic)
+        await query.edit_message_text(
+            text + f"\n\n✓ Cleared {n} seen articles.",
+            reply_markup=keyboard,
+            parse_mode="Markdown",
+        )
+
+    elif action == "schedule":
+        await query.message.reply_text(  # type: ignore[union-attr]
+            f"To change the schedule for *{_short(topic.name)}*, type:\n/schedule {topic.name}",
+            parse_mode="Markdown",
+        )
+
+    elif action == "rename":
+        if context.user_data is not None:
+            context.user_data["awaiting_rename_id"] = str(topic.id)
+            context.user_data["awaiting_rename_name"] = topic.name
+        await query.message.reply_text(  # type: ignore[union-attr]
+            f"Type the new name for *{_short(topic.name)}*:\n_(/cancel to abort)_",
+            parse_mode="Markdown",
+        )
+
+    elif action == "describe":
+        if context.user_data is not None:
+            context.user_data["awaiting_describe_id"] = str(topic.id)
+            context.user_data["awaiting_describe_name"] = topic.name
+        current = topic.description or topic.name
+        await query.message.reply_text(  # type: ignore[union-attr]
+            f"Type the new research focus for *{_short(topic.name)}*:\n"
+            f"Current: _{current}_\n_(/cancel to abort)_",
+            parse_mode="Markdown",
+        )
+
+    elif action == "delete":
+        await query.edit_message_text(
+            f"Delete *{_short(topic.name)}*?\n\nThis removes the topic and all its history.",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "Yes, delete", callback_data=f"tp:del_confirm:{topic.id}"
+                        ),
+                        InlineKeyboardButton(
+                            "Cancel", callback_data=f"tp:del_cancel:{topic.id}"
+                        ),
+                    ]
+                ]
+            ),
+            parse_mode="Markdown",
+        )
+
+    elif action == "del_confirm":
+        name = topic.name
+        await store.delete_topic(topic.id)
+        await query.edit_message_text(f"✓ *{_short(name)}* deleted.", parse_mode="Markdown")
+
+    elif action == "del_cancel":
+        text, keyboard = _topic_card(topic)
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+
+# ---------------------------------------------------------------------------
 # /topics
 # ---------------------------------------------------------------------------
+
+
+def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the text + action keyboard for one topic card."""
+    query_text = t.description or t.name
+    status = "⏸ paused" if t.paused else _sched_label(t)
+    last = t.last_sent_at.strftime("%d %b %H:%M") if t.last_sent_at else "never"
+    text = f"📌 *{t.name}*\n_{query_text}_\n{status} · last: {last}"
+
+    tid = str(t.id)
+    pause_lbl = "▶ Resume" if t.paused else "⏸ Pause"
+    pause_act = "resume" if t.paused else "pause"
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("▶ Check now", callback_data=f"tp:check:{tid}"),
+                InlineKeyboardButton(pause_lbl, callback_data=f"tp:{pause_act}:{tid}"),
+            ],
+            [
+                InlineKeyboardButton("📅 Schedule", callback_data=f"tp:schedule:{tid}"),
+                InlineKeyboardButton("🔄 Reset", callback_data=f"tp:reset:{tid}"),
+            ],
+            [
+                InlineKeyboardButton("✏️ Rename", callback_data=f"tp:rename:{tid}"),
+                InlineKeyboardButton("📝 Research focus", callback_data=f"tp:describe:{tid}"),
+            ],
+            [InlineKeyboardButton("🗑 Delete", callback_data=f"tp:delete:{tid}")],
+        ]
+    )
+    return text, keyboard
 
 
 async def cmd_topics(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -866,18 +1002,10 @@ async def cmd_topics(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
             "You have no topics yet. Use /add\\_topic to create one.", parse_mode="Markdown"
         )
         return
-    lines = ["*Your topics:*\n"]
+    await update.message.reply_text(f"Your {len(topics)} topic(s):")
     for t in topics:
-        status = "⏸ paused" if t.paused else _sched_label(t)
-        last = t.last_sent_at.strftime("%d %b %H:%M") if t.last_sent_at else "never"
-        # Show what the LLM actually searches for — this is the research query focus
-        query_text = t.description or t.name
-        lines.append(
-            f"📌 *{t.name}*\n"
-            f"_{query_text}_\n"
-            f"{status} · last sent: {last}"
-        )
-    await update.message.reply_text("\n\n".join(lines), parse_mode="Markdown")
+        text, keyboard = _topic_card(t)
+        await update.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
 
 # ---------------------------------------------------------------------------
@@ -1265,16 +1393,50 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     text = update.message.text.strip()
     ud = context.user_data
-    topic_id = ud.get("awaiting_correction_topic") if ud is not None else None
 
-    if topic_id is not None and ud is not None:
+    if text.lower() == "/cancel" and ud is not None:
+        for key in ("awaiting_rename_id", "awaiting_rename_name",
+                    "awaiting_describe_id", "awaiting_describe_name"):
+            ud.pop(key, None)
+        await update.message.reply_text("Cancelled.")
+        return
+
+    # Inline rename (triggered by ✏️ Rename button on topic card)
+    if ud is not None and ud.get("awaiting_rename_id"):
+        from uuid import UUID
+
+        topic_id = UUID(ud.pop("awaiting_rename_id"))
+        old_name = ud.pop("awaiting_rename_name", "")
+        await store.update_topic(topic_id, name=text)
+        await update.message.reply_text(
+            f"✓ *{old_name}* renamed to *{text}*.", parse_mode="Markdown"
+        )
+        return
+
+    # Inline describe (triggered by 📝 Research focus button on topic card)
+    if ud is not None and ud.get("awaiting_describe_id"):
+        from uuid import UUID
+
+        topic_id = UUID(ud.pop("awaiting_describe_id"))
+        topic_name = ud.pop("awaiting_describe_name", "")
+        await store.update_topic(topic_id, description=text)
+        await update.message.reply_text(
+            f"✓ *{topic_name}* will now research:\n_{text}_\n\n"
+            "Use /reset then /check to fetch fresh results.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # Feedback correction (triggered by 👎 button on digest)
+    topic_id_fb = ud.get("awaiting_correction_topic") if ud is not None else None
+    if topic_id_fb is not None and ud is not None:
         ud.pop("awaiting_correction_topic")
         if text.lower() != "/skip":
             try:
-                await store.append_feedback_note(topic_id, text)
+                await store.append_feedback_note(topic_id_fb, text)
                 await update.message.reply_text("✓ Noted — I'll adjust future digests.")
             except Exception:  # noqa: BLE001
-                logger.warning("failed to save correction for topic {}", topic_id)
+                logger.warning("failed to save correction for topic {}", topic_id_fb)
                 await update.message.reply_text("Couldn't save that — try again later.")
         else:
             await update.message.reply_text("No problem, skipped.")
@@ -1372,6 +1534,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CommandHandler("rename", cmd_rename))
     app.add_handler(CommandHandler("describe", cmd_describe))
     app.add_handler(CommandHandler("delete_topic", cmd_delete_topic))
+    app.add_handler(CallbackQueryHandler(on_topic_panel, pattern=r"^tp:"))
     app.add_handler(CallbackQueryHandler(on_topic_action, pattern=r"^ta:"))
     app.add_handler(CallbackQueryHandler(on_topic_delete_confirm, pattern=r"^td:"))
     app.add_handler(CallbackQueryHandler(on_tz_set, pattern=r"^tzset:"))
