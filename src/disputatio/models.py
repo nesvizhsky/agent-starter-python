@@ -46,6 +46,7 @@ class Article(BaseModel):
     source: str
     published_at: datetime | None
     summary: str
+    context: str | None = None  # full Perplexity research answer from the query that found this
 
 
 class SourceView(BaseModel):

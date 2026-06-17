@@ -4,7 +4,9 @@ Takes a list of Story objects (with signals already populated by propaganda.py)
 plus a Persona and optional user feedback notes, and writes the actual digest
 text in the persona's voice.
 
-Returns DigestOutput(main, overflow) where main <= 300 words.
+Returns DigestOutput(main, character_note, overflow).
+main: structured bullet-per-source digest, <=250 words.
+character_note: persona's closing observation, sent as a separate message.
 overflow is stored in the DB and surfaced on /more.
 """
 
@@ -23,8 +25,16 @@ from disputatio.personas import Persona
 class DigestOutput(BaseModel):
     main: str = Field(
         description=(
-            "The main digest, written in the persona's voice. 300 words maximum. Cover every story."
+            "The structured digest. For each story: bold headline, 1-sentence summary, "
+            "then one bullet per source. 250 words maximum."
         )
+    )
+    character_note: str | None = Field(
+        default=None,
+        description=(
+            "A short closing observation in the persona's voice — their take on what "
+            "today's stories reveal. 2-3 sentences max. This is the character moment."
+        ),
     )
     overflow: str | None = Field(
         default=None,
@@ -66,25 +76,26 @@ def _system_prompt(ctx: RunContext[_Deps]) -> str:
         "said side by side — so they can see the full picture and judge for themselves.\n\n"
         "CHARACTER VOICE — stay in this throughout:\n"
         f"{ctx.deps.voice}\n\n"
-        "FORMAT — Telegram HTML only, no other markup:\n"
-        "- Each story: <b>📌 [what happened — short, factual]</b> on its own line\n"
-        "- 2-3 sentences in your persona's voice: lead with the event, then how key "
-        "parties reacted or framed it — do NOT lead with who reported it\n"
-        "- Propaganda/bias signals: add inline immediately after the relevant phrase:\n"
-        "    🚩 <i>state framing</i>  — when a source uses official/propaganda language\n"
-        "    ⚠️ <i>omission</i>  — when a source leaves out a key fact\n"
-        "  Use sparingly — only when clearly present. One per sentence max.\n"
-        "- Last line of each story: HTML links in brackets: "
-        '[<a href="URL1">Source1</a>, <a href="URL2">Source2</a>]\n'
-        "  Use the URL provided for each source view.\n"
-        "- Blank line between stories. Only <b> and <i> tags. No other HTML.\n\n"
+        "FORMAT for main — Telegram HTML only:\n"
+        "<b>📌 [what specifically happened — one concrete event]</b>\n"
+        "[One sentence: the key fact. What, who, where.]\n"
+        '• <a href="URL"><i>Source A</i></a> — [what they specifically said/claimed]\n'
+        '• <a href="URL"><i>Source B</i></a> — [their framing] 🚩 <i>state framing</i>\n'
+        '• <a href="URL"><i>Source C</i></a> — [key omission noted] ⚠️ <i>omission</i>\n'
+        "[blank line between stories]\n\n"
+        "Signals — add inline, sparingly, only when clearly present:\n"
+        "  🚩 <i>state framing</i>  — propaganda/official language\n"
+        "  ⚠️ <i>omission</i>  — a key fact left out\n\n"
+        "For character_note: 2-3 sentences purely in your persona's voice — "
+        "your take on what today's pattern reveals. This is your character moment.\n\n"
         "RULES:\n"
-        "1. WHAT HAPPENED comes first. Sources are evidence, not the subject.\n"
-        "2. Facts must be concrete: who, what, where. Your persona colors the language "
-        "and framing — it never replaces the facts with metaphor or abstraction.\n"
-        "3. Voice runs through every sentence. Do not save character for the last line.\n"
-        "4. 300 words max in main. Full source analysis goes in overflow.\n"
-        "5. If nothing new happened, say so briefly — in character."
+        "1. Only cover events that SPECIFICALLY HAPPENED — new facts, not the general "
+        "state of affairs. 'Russia's invasion continues' is not a story.\n"
+        "2. Lead with the event, not the source. Sources are bullets, not the subject.\n"
+        "3. Every bullet must state what that source specifically claimed — not that "
+        "they 'covered' something.\n"
+        "4. 250 words max in main. Depth in overflow.\n"
+        "5. If nothing genuinely new happened, say so — in character, very briefly."
         f"{notes_block}"
     )
 

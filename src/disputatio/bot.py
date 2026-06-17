@@ -10,6 +10,7 @@ In production the same handlers run via webhook — see app.py.
 from __future__ import annotations
 
 from loguru import logger
+from pydantic_ai import Agent
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -25,6 +26,7 @@ from telegram.ext import (
 
 from agent.config import get_settings
 from agent.logging_setup import setup_logging
+from agent.services.llm import build_model
 from disputatio import jobs, store
 from disputatio.personas import all_keys
 
@@ -32,7 +34,27 @@ from disputatio.personas import all_keys
 # ConversationHandler states for /add_topic
 # ---------------------------------------------------------------------------
 
-_ASK_NAME, _ASK_DESC, _ASK_FREQ, _ASK_SOURCES = range(4)
+_ASK_DESC, _ASK_NAME_CONFIRM, _ASK_FREQ, _ASK_SOURCES = range(4)
+
+# ---------------------------------------------------------------------------
+# Name-generation agent (fast + cheap — just makes a 2-4 word label)
+# ---------------------------------------------------------------------------
+
+_name_agent: Agent[None, str] = Agent(
+    build_model("fast"),
+    output_type=str,
+    system_prompt=(
+        "Generate a short topic label (2–4 words, title case) from the user's description. "
+        "Return ONLY the label — no quotes, no punctuation, no explanation. "
+        "Examples: 'Russia-Ukraine War', 'AI Regulation', 'Megalithic Archaeology', 'Climate Policy'."  # noqa: E501
+    ),
+)
+
+
+async def _generate_name(description: str) -> str:
+    result = await _name_agent.run(description)
+    return result.output.strip()
+
 
 _VALID_SIGNALS = {"good", "too_shallow", "too_long", "already_knew", "wrong_persona"}
 
@@ -97,45 +119,67 @@ async def cmd_add_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if update.message is None or not await _allowed(update):
         return ConversationHandler.END
     await update.message.reply_text(
-        "Give this topic a *short label* — this is what I'll call it everywhere.\n"
-        "Examples: *Russia-Ukraine*, *AI regulation*, *Archaeology*",
-        parse_mode="Markdown",
-    )
-    return _ASK_NAME
-
-
-async def _got_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message is None or not update.message.text or context.user_data is None:
-        return _ASK_NAME
-    name = update.message.text.strip()
-    if not name:
-        await update.message.reply_text("Please send a short label.")
-        return _ASK_NAME
-    context.user_data["new_topic_name"] = name
-    await update.message.reply_text(
-        f"Got it — *{name}*.\n\n"
-        "Any research focus? Tell me what angle you care about — I'll use this "
-        "to find better articles. Or tap Skip to use the label as-is.",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Skip", callback_data="desc:skip")]]
-        ),
-        parse_mode="Markdown",
+        "What do you want to track?\n\nDescribe it in a sentence — I'll suggest a name."
     )
     return _ASK_DESC
 
 
-async def _got_desc_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None or not update.message.text or context.user_data is None:
         return _ASK_DESC
-    context.user_data["new_topic_desc"] = update.message.text.strip()
-    return await _ask_freq(update, context)
+    desc = update.message.text.strip()
+    if not desc:
+        await update.message.reply_text("Please describe what you want to track.")
+        return _ASK_DESC
+    context.user_data["new_topic_desc"] = desc
+
+    await update.message.chat.send_action(ChatAction.TYPING)
+    try:
+        name = await _generate_name(desc)
+    except Exception:  # noqa: BLE001
+        name = " ".join(desc.split()[:4]).rstrip(".,!?")
+
+    context.user_data["new_topic_name"] = name
+    await update.message.reply_text(
+        f"📌 *{name}*\n\nLooks good as the topic name?",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Continue →", callback_data="name:ok"),
+                    InlineKeyboardButton("Rename it", callback_data="name:rename"),
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+    return _ASK_NAME_CONFIRM
 
 
-async def _got_desc_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def _name_confirmed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query:
         await query.answer()
-        await query.edit_message_text("No extra focus — I'll use the label.")
+        name = context.user_data.get("new_topic_name", "") if context.user_data else ""
+        await query.edit_message_text(f"✓ *{name}*", parse_mode="Markdown")
+    return await _ask_freq(update, context)
+
+
+async def _name_rename_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await query.edit_message_text("Type a short label for this topic:")
+    return _ASK_NAME_CONFIRM
+
+
+async def _got_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message is None or not update.message.text or context.user_data is None:
+        return _ASK_NAME_CONFIRM
+    name = update.message.text.strip()
+    if not name:
+        await update.message.reply_text("Please type a short label.")
+        return _ASK_NAME_CONFIRM
+    context.user_data["new_topic_name"] = name
     return await _ask_freq(update, context)
 
 
@@ -716,10 +760,11 @@ def build_application() -> Application:  # type: ignore[type-arg]
     add_topic_conv = ConversationHandler(
         entry_points=[CommandHandler("add_topic", cmd_add_topic)],
         states={
-            _ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, _got_name)],
-            _ASK_DESC: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, _got_desc_text),
-                CallbackQueryHandler(_got_desc_skip, pattern=r"^desc:skip"),
+            _ASK_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, _got_desc)],
+            _ASK_NAME_CONFIRM: [
+                CallbackQueryHandler(_name_confirmed, pattern=r"^name:ok"),
+                CallbackQueryHandler(_name_rename_prompt, pattern=r"^name:rename"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _got_custom_name),
             ],
             _ASK_FREQ: [CallbackQueryHandler(_got_freq, pattern=r"^freq:")],
             _ASK_SOURCES: [

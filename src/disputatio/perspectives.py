@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from agent.services.llm import build_model
-from disputatio.models import Article, SourceView, Story
+from disputatio.models import Article, Story
 
 # ---------------------------------------------------------------------------
 # Agent definition
@@ -30,17 +30,22 @@ _agent: Agent[None, _Output] = Agent(
     system_prompt=(
         "You are a news editor grouping articles by the real-world event they describe.\n\n"
         "Rules:\n"
-        "1. Two articles are about the SAME event if they describe the same occurrence "
+        "1. Only include articles that are directly about the stated topic. "
+        "Discard any article that is primarily about a different subject.\n"
+        "2. Two articles are about the SAME event if they describe the same occurrence "
         "(same attack, same decision, same discovery) even if the framing, vocabulary, "
         "or emphasis differs. BBC saying 'Russia fires missiles at Kyiv' and TASS saying "
         "'Russia conducts precision strike on military targets in Kyiv' are the SAME event.\n"
-        "2. Create one story per distinct event. Add every article that covers it as a source_view.\n"  # noqa: E501
-        "3. Write a short, neutral headline for each story — describe what happened without "
-        "adopting any source's framing.\n"
-        "4. For each source_view, write one sentence summarising the specific finding, "
-        "conclusion, or claim that source reported — not just that they covered it. "
-        "Use the article summary to do this accurately.\n"
-        "5. Return ALL input articles. Do not omit any."
+        "3. Only create stories for things that SPECIFICALLY HAPPENED — new events, "
+        "decisions, statements, or developments. Do not create a story for the general "
+        "ongoing state of a conflict or situation.\n"
+        "4. Create one story per distinct new event. Add every article that covers it "
+        "as a source_view.\n"
+        "5. Write a short, neutral headline for each story — what specifically happened.\n"
+        "6. For each source_view, write one sentence stating the specific claim, finding, "
+        "or framing that source used — drawn from the Research Context, not just the headline. "
+        "What did they actually report?\n"
+        "7. It is better to return fewer, concrete stories than many vague ones."
     ),
 )
 
@@ -49,23 +54,18 @@ _agent: Agent[None, _Output] = Agent(
 # ---------------------------------------------------------------------------
 
 
-async def cluster(articles: list[Article]) -> list[Story]:
+async def cluster(articles: list[Article], topic_name: str = "") -> list[Story]:
     """Group *articles* into stories by event.
 
     Returns an empty list for empty input without making an LLM call.
-    Guarantees every input article appears in at least one story.
+    Does NOT guarantee every article appears — off-topic articles are dropped.
     """
     if not articles:
         return []
 
-    prompt = _format_prompt(articles)
+    prompt = _format_prompt(articles, topic_name)
     result = await _agent.run(prompt)
-    stories = result.output.stories
-
-    # Safety net: ensure no article was lost in the LLM's grouping
-    stories = _recover_missing(articles, stories)
-
-    return stories
+    return result.output.stories
 
 
 # ---------------------------------------------------------------------------
@@ -73,30 +73,27 @@ async def cluster(articles: list[Article]) -> list[Story]:
 # ---------------------------------------------------------------------------
 
 
-def _format_prompt(articles: list[Article]) -> str:
-    lines = [f"Group these {len(articles)} articles into stories:\n"]
+def _format_prompt(articles: list[Article], topic_name: str) -> str:
+    lines: list[str] = []
+
+    if topic_name:
+        lines.append(f"TOPIC: {topic_name}\n")
+        lines.append("Only include articles directly about this topic. Discard anything else.\n")
+
+    # Include unique research contexts (one per source query) so the agent has
+    # real content to draw on when writing source_view summaries.
+    seen_contexts: set[str] = set()
+    context_blocks: list[str] = []
+    for a in articles:
+        if a.context and a.context not in seen_contexts:
+            seen_contexts.add(a.context)
+            context_blocks.append(f"[{a.source}]\n{a.context[:600]}")
+    if context_blocks:
+        lines.append("RESEARCH CONTEXT (use this to write accurate source_view summaries):\n")
+        lines.extend(context_blocks)
+        lines.append("")
+
+    lines.append(f"Group these {len(articles)} articles into stories:\n")
     for i, a in enumerate(articles, 1):
-        lines.append(f"{i}. Source: {a.source} | Headline: {a.headline}")
-        lines.append(f"   Summary: {a.summary}")
-        lines.append(f"   URL: {a.url}")
+        lines.append(f"{i}. Source: {a.source} | Headline: {a.headline} | URL: {a.url}")
     return "\n".join(lines)
-
-
-def _recover_missing(articles: list[Article], stories: list[Story]) -> list[Story]:
-    """Add any articles the LLM omitted as solo stories."""
-    seen_urls = {view.url for story in stories for view in story.source_views}
-    for article in articles:
-        if article.url not in seen_urls:
-            stories.append(
-                Story(
-                    headline=article.headline,
-                    source_views=[
-                        SourceView(
-                            source=article.source,
-                            url=article.url,
-                            summary=article.summary,
-                        )
-                    ],
-                )
-            )
-    return stories

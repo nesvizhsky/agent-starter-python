@@ -173,16 +173,29 @@ async def _send_digest(
     for i, chunk in enumerate(chunks):
         is_last = i == len(chunks) - 1
         text = (byline + chunk) if i == 0 else chunk
+        has_feedback = is_last and not output.character_note
         kwargs = {
             "chat_id": topic.telegram_id,
             "text": text,
-            "reply_markup": _feedback_keyboard(digest_id) if is_last else None,
+            "reply_markup": _feedback_keyboard(digest_id) if has_feedback else None,
         }
         try:
             await bot.send_message(**kwargs, parse_mode="HTML")
         except BadRequest:
             logger.warning("HTML parse failed for chunk {}/{} — retrying plain", i + 1, len(chunks))
             await bot.send_message(**kwargs)
+
+    if output.character_note:
+        note = f"<i>{output.character_note}</i>"
+        kwargs_note = {
+            "chat_id": topic.telegram_id,
+            "text": note,
+            "reply_markup": _feedback_keyboard(digest_id),
+        }
+        try:
+            await bot.send_message(**kwargs_note, parse_mode="HTML")
+        except BadRequest:
+            await bot.send_message(**kwargs_note)
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +217,7 @@ async def _run_digest(topic: Topic, bot: Bot) -> None:
         logger.info("nothing new for {!r} — skipping", topic.name)
         return
 
-    stories = await perspectives.cluster(fresh)
+    stories = await perspectives.cluster(fresh, topic_name=topic.name)
     stories = await propaganda.analyze(stories)
     persona = pick(topic.pinned_persona)
     output = await digest.generate(stories, persona, topic.feedback_notes)

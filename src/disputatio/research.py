@@ -69,8 +69,10 @@ async def gather(topic: Topic) -> list[Article]:
 
 async def _query_source(topic_name: str, source: str, lookback: str) -> list[Article]:
     query = (
-        f'News about "{topic_name}" from {source}, published in the last {lookback}. '
-        f"List specific articles with their exact headlines."
+        f"What specifically happened with {topic_name!r} according to {source} "
+        f"in the last {lookback}? "
+        f"List concrete events, statements, or decisions — not background or context. "
+        f"Cite specific article headlines."
     )
     try:
         result = await _research(query)
@@ -82,8 +84,10 @@ async def _query_source(topic_name: str, source: str, lookback: str) -> list[Art
 
 async def _query_general(topic_name: str, lookback: str) -> list[Article]:
     query = (
-        f'"{topic_name}" — latest developments from multiple perspectives, '
-        f"published in the last {lookback}. Include a range of viewpoints."
+        f"What specifically happened with {topic_name!r} in the last {lookback}? "
+        f"List concrete events, decisions, or new developments from multiple sources. "
+        f"Focus only on what is NEW — not background or the general state of affairs. "
+        f"Include a range of viewpoints and cite specific articles."
     )
     try:
         result = await _research(query)
@@ -96,10 +100,10 @@ async def _query_general(topic_name: str, lookback: str) -> list[Article]:
 def _parse(result: Research, default_source: str) -> list[Article]:
     """Turn a Research result into Article objects.
 
-    Each cited URL becomes one Article. The headline comes from the citation
-    title (Perplexity usually returns the article title there). The summary
-    is the headline — sufficient for embedding-based dedup; richer summaries
-    can be extracted by perspectives.py which sees the full research prose.
+    Each cited URL becomes one Article. The headline comes from the citation title.
+    summary = headline (used for embedding-based dedup).
+    context = the full Perplexity answer prose, attached to every article from
+    this query so perspectives.py has real content to write about.
     """
     articles = []
     for src in result.sources:
@@ -114,6 +118,7 @@ def _parse(result: Research, default_source: str) -> list[Article]:
                 source=source,
                 published_at=None,  # Perplexity citations don't include dates
                 summary=headline,
+                context=result.text,
             )
         )
     return articles
