@@ -959,12 +959,17 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ---------------------------------------------------------------------------
 
 
+# Braille blanks (U+2800) are invisible but not stripped by Telegram — appending
+# them forces the message bubble to full screen width so buttons span the full row.
+_FILL = "⠀" * 36
+
+
 def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
     """Build the text + action keyboard for one topic card."""
     query_text = t.description or t.name
     status = "⏸ paused" if t.paused else _sched_label(t)
     last = t.last_sent_at.strftime("%d %b") if t.last_sent_at else "never"
-    text = f"📌 *{t.name}*\n_{query_text}_\n{status} · {last}"
+    text = f"📌 *{t.name}*\n_{query_text}_\n{status} · {last}\n{_FILL}"
 
     tid = str(t.id)
     pause_lbl = "▶ Resume" if t.paused else "⏸ Pause"
