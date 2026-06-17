@@ -50,8 +50,6 @@ _BLOCKED_GENERAL_DOMAINS: frozenset[str] = frozenset(
     {
         "youtube.com",
         "youtu.be",
-        "medium.com",
-        "substack.com",
         "marketingprofs.com",
         "buildfastwithai.com",
         "promptailearning.com",
@@ -147,7 +145,7 @@ async def gather(topic: Topic) -> list[Article]:
             if article.url in seen:
                 continue
             if _ROUNDUP_RE.search(article.headline):
-                logger.debug("dropped roundup/listicle: {!r}", article.headline)
+                logger.info("dropped roundup/listicle: {!r}", article.headline)
                 dropped += 1
                 continue
             seen.add(article.url)
