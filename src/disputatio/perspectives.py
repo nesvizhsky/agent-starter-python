@@ -7,8 +7,6 @@ Grouping is done by an LLM (balanced tier). The agent also sets importance
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
@@ -34,9 +32,10 @@ _agent: Agent[None, _Output] = Agent(
         "2. Two articles cover the SAME event if they describe the same occurrence "
         "(attack, decision, discovery) regardless of framing. BBC 'Russia fires missiles at Kyiv' "
         "and TASS 'Russia conducts precision strike on military targets in Kyiv' = SAME event.\n"
-        "3. Only create stories for things that SPECIFICALLY HAPPENED during the stated lookback "
-        "window. Discard articles whose event clearly falls outside this window — an anniversary "
-        "piece about something from months ago is NOT new news.\n"
+        "3. Only create stories for things that SPECIFICALLY HAPPENED — new events, "
+        "decisions, statements, or discoveries. Do not create a story for the general "
+        "ongoing state of a situation. If an event is clearly old (months ago), "
+        "set importance=3 rather than dropping it.\n"
         "4. Create one story per distinct event. Add every article covering it as a source_view.\n"
         "5. Headline: sentence case, informative — a reader should know what happened from "
         "the headline alone. 'Russia tightens small-business taxes to fund the war' not "
@@ -68,8 +67,7 @@ async def cluster(
     if not articles:
         return []
 
-    today = datetime.now(UTC).strftime("%B %d, %Y")
-    prompt = _format_prompt(articles, topic_name, lookback, today)
+    prompt = _format_prompt(articles, topic_name)
     result = await _agent.run(prompt)
     return result.output.stories
 
@@ -79,10 +77,9 @@ async def cluster(
 # ---------------------------------------------------------------------------
 
 
-def _format_prompt(articles: list[Article], topic_name: str, lookback: str, today: str) -> str:
+def _format_prompt(articles: list[Article], topic_name: str) -> str:
     lines: list[str] = []
 
-    lines.append(f"TODAY: {today}. Only include events from the last {lookback}.\n")
     if topic_name:
         lines.append(f"TOPIC: {topic_name}\n")
         lines.append("Only include articles directly about this topic. Discard anything else.\n")

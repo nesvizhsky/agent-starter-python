@@ -29,7 +29,7 @@ def test_format_prompt_includes_all_articles() -> None:
         _article("https://bbc.com/a", "Ceasefire talks begin", "BBC"),
         _article("https://tass.ru/b", "Russia proposes peace", "TASS"),
     ]
-    prompt = _format_prompt(articles, topic_name="Russia-Ukraine", lookback="48 hours", today="June 17, 2026")  # noqa: E501
+    prompt = _format_prompt(articles, topic_name="Russia-Ukraine")
     assert "BBC" in prompt
     assert "TASS" in prompt
     assert "Ceasefire talks begin" in prompt
