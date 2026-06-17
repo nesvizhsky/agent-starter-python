@@ -311,10 +311,12 @@ async def _ask_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             [
                 InlineKeyboardButton("Every day", callback_data="sched:daily"),
                 InlineKeyboardButton("Twice daily", callback_data="sched:twice_daily"),
-                InlineKeyboardButton("Mon–Fri", callback_data="sched:weekdays"),
             ],
             [
+                InlineKeyboardButton("Mon–Fri", callback_data="sched:weekdays"),
                 InlineKeyboardButton("Mon/Wed/Fri", callback_data="sched:mwf"),
+            ],
+            [
                 InlineKeyboardButton("Tue/Thu", callback_data="sched:tuth"),
                 InlineKeyboardButton("Pick days…", callback_data="sched:custom_days"),
             ],
@@ -431,8 +433,8 @@ async def _got_single_day(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 def _parse_time(text: str) -> tuple[int, int]:
-    """Parse '9:30', '21', '9am', '9:30pm' → (hour, minute). Defaults to 9:00."""
-    t = text.strip().lower().replace(".", ":").replace("h", ":")
+    """Parse '9:30', '21', '10-00', '9am', '9:30pm' → (hour, minute). Defaults to 9:00."""
+    t = text.strip().lower().replace(".", ":").replace("h", ":").replace("-", ":")
     pm = t.endswith("pm")
     am = t.endswith("am")
     t = t.removesuffix("pm").removesuffix("am").strip()
