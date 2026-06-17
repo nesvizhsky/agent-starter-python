@@ -206,6 +206,7 @@ async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     results = await asyncio.gather(
         _generate_name(desc),
         research.expand_query(desc, ""),
+        research.generate_source_guidance(desc, ""),
         return_exceptions=True,
     )
     name = (
@@ -214,12 +215,14 @@ async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         else " ".join(desc.split()[:4]).rstrip(".,!?")
     )
     expanded = results[1] if not isinstance(results[1], BaseException) else desc
+    guidance = results[2] if not isinstance(results[2], BaseException) else None
 
     context.user_data["new_topic_name"] = name
     context.user_data["new_topic_desc"] = expanded
+    context.user_data["new_topic_source_guidance"] = guidance
 
     await update.message.reply_text(
-        f"📌 *{name}*\n🔍 _{expanded}_\n\nName and research query look good?",
+        f"📌 *{name}*\n🔍 _{expanded}_\n🌐 _{guidance}_\n\nLooks good?",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
@@ -607,6 +610,7 @@ async def _create_topic(
     ud = context.user_data
     name = ud.pop("new_topic_name", "")
     desc = ud.pop("new_topic_desc", None)
+    source_guidance = ud.pop("new_topic_source_guidance", None)
     freq = ud.pop("new_topic_freq", "daily")
     hour = ud.pop("new_topic_hour", 8)
     minute = ud.pop("new_topic_minute", 0)
@@ -628,6 +632,7 @@ async def _create_topic(
         send_dow=dow,
         schedule_days=schedule_days,
         timezone=tz,
+        source_guidance=source_guidance,
     )
     label = _sched_label_data(freq, hour, minute, dow, schedule_days, tz)
     tz_label = next((lbl for lbl, z in _TIMEZONES if z == tz), tz)
@@ -1413,6 +1418,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "awaiting_rename_name",
             "awaiting_describe_id",
             "awaiting_describe_name",
+            "new_topic_source_guidance",
         ):
             ud.pop(key, None)
         await update.message.reply_text("Cancelled.")
@@ -1437,8 +1443,16 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         topic_id = UUID(ud.pop("awaiting_describe_id"))
         topic_name = ud.pop("awaiting_describe_name", "")
         await update.message.chat.send_action(ChatAction.TYPING)
-        expanded = await research.expand_query(text, topic_name)
+        results = await asyncio.gather(
+            research.expand_query(text, topic_name),
+            research.generate_source_guidance(text, topic_name),
+            return_exceptions=True,
+        )
+        expanded = results[0] if not isinstance(results[0], BaseException) else text
+        guidance = results[1] if not isinstance(results[1], BaseException) else None
         await store.update_topic(topic_id, description=expanded)
+        if guidance:
+            await store.update_topic(topic_id, source_guidance=guidance)
         await update.message.reply_text(
             f"✓ *{topic_name}* will now research:\n_{expanded}_\n\n"
             "Use /reset then /check to fetch fresh results.",

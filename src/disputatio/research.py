@@ -127,9 +127,10 @@ async def gather(topic: Topic) -> list[Article]:
     # Use description as the research query when set — it's the user's detailed focus.
     # Fall back to name so the short label still produces sensible results.
     query_subject = topic.description or topic.name
+    source_instr = topic.source_guidance or _GENERAL_QUERY_INSTRUCTIONS
     today = datetime.now(UTC).strftime("%B %d, %Y")
     coros = [_query_source(query_subject, src, lookback, today) for src in active]
-    coros.append(_query_general(query_subject, lookback, today))
+    coros.append(_query_general(query_subject, lookback, today, source_instr))
 
     raw = await asyncio.gather(*coros, return_exceptions=True)
 
@@ -177,24 +178,69 @@ async def _query_source(topic_name: str, source: str, lookback: str, today: str)
     return _parse(result, default_source=source)
 
 
+_SOURCE_EXCLUSIONS = (
+    "Do not cite: YouTube, company press releases or blogs, marketing content, "
+    "social media posts, analyst market-research reports, or aggregator listicles. "
+    "Each citation must be a primary news report or original publication — not a roundup of other news."  # noqa: E501
+)
+
+# Fallback used only when a topic has no stored source_guidance.
 _GENERAL_QUERY_INSTRUCTIONS = (
     "Prioritise: established newspapers and wire services (Reuters, AP, AFP, BBC, Guardian, NYT, FT); "  # noqa: E501
     "specialist technology and science journalism (Ars Technica, Wired, MIT Technology Review, "
     "The Verge, TechCrunch, IEEE Spectrum, VentureBeat, New Scientist, Nature, Science, "
     "ScienceDaily, PhysOrg, The Lancet, NEJM, arXiv); and official institutional or government sources. "  # noqa: E501
     "Include new research findings, studies, and scientific discoveries when relevant. "
-    "Do not cite: YouTube, company press releases or blogs, marketing content, "
-    "social media, analyst market-research reports, or aggregator listicles. "
-    "Each citation must be a primary news report or original publication — not a roundup of other news."  # noqa: E501
+    f"{_SOURCE_EXCLUSIONS}"
+)
+
+_source_profiler: Agent[None, str] = Agent(
+    build_model("fast"),
+    output_type=str,
+    system_prompt=(
+        "You generate source guidance for a news research bot. Given a topic, write 1-3 sentences "
+        "naming the most relevant outlets to prioritise. Think carefully about:\n"
+        "1. Topic-specific specialist publications (e.g. IEEE Spectrum/Ars Technica for tech, "
+        "The Lancet/NEJM for medicine, IAEA for nuclear, Variety/Deadline for film)\n"
+        "2. Regional and national outlets in the LOCAL LANGUAGE if the topic is geographically "
+        "specific (e.g. for Israel/Palestine: Haaretz, Al Jazeera Arabic, Ynet; for Japan: "
+        "Nikkei Asia, NHK World, Mainichi; for Brazil: Folha de S.Paulo, O Globo, Agência Brasil; "
+        "for France: Le Monde, Le Figaro; for Russia: Meduza, The Insider, iStories)\n"
+        "3. Wire services and major international press (Reuters, AP, BBC, Guardian) as a base\n"
+        "4. Academic or institutional primary sources where relevant (arXiv, PubMed, INAH, WHO)\n\n"
+        "Always include both specialist/regional AND international coverage. "
+        "Start directly with 'Prioritise:' — no preamble. "
+        "Example: 'Prioritise: Haaretz, Al Jazeera, Times of Israel, Reuters, AP, BBC. "
+        "Include Arabic-language sources (Al Jazeera Arabic, Asharq Al-Awsat) and Hebrew-language "
+        "sources (Ynet, Maariv) for regional perspectives.'"
+    ),
 )
 
 
-async def _query_general(topic_name: str, lookback: str, today: str) -> list[Article]:
+async def generate_source_guidance(description: str, topic_name: str) -> str:
+    """Generate topic-specific source guidance for the research query.
+
+    Falls back to the generic instructions if the LLM call fails.
+    """
+    prompt = f"Topic: {topic_name}\nResearch query: {description}"
+    try:
+        result = await _source_profiler.run(prompt)
+        guidance = result.output.strip()
+        # Always append the quality exclusions so guidance stays consistent.
+        return f"{guidance} {_SOURCE_EXCLUSIONS}"
+    except Exception:  # noqa: BLE001
+        logger.warning("source guidance generation failed for {!r} — using defaults", topic_name)
+        return _GENERAL_QUERY_INSTRUCTIONS
+
+
+async def _query_general(
+    topic_name: str, lookback: str, today: str, source_instr: str
+) -> list[Article]:
     query = (
         f"Today is {today}. What specifically happened with {topic_name!r} in the last {lookback}? "
         f"Only include events from this time window — not older background or context. "
         f"List concrete recent events, decisions, or developments from multiple perspectives. "
-        f"{_GENERAL_QUERY_INSTRUCTIONS}"
+        f"{source_instr}"
     )
     try:
         result = await _research(query)

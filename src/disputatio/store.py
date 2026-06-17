@@ -35,6 +35,7 @@ _UPDATABLE_TOPIC_FIELDS = frozenset(
         "trusted_sources",
         "pinned_persona",
         "feedback_notes",
+        "source_guidance",
     }
 )
 
@@ -131,13 +132,15 @@ async def create_topic(
     timezone: str = "UTC",
     sources: list[str],
     description: str | None = None,
+    source_guidance: str | None = None,
 ) -> Topic:
     row = await db.fetchrow(
         """
         INSERT INTO disputatio_topics
             (telegram_id, name, description, frequency,
-             send_hour, send_minute, send_dow, schedule_days, timezone, sources)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             send_hour, send_minute, send_dow, schedule_days, timezone, sources,
+             source_guidance)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING *
         """,
         telegram_id,
@@ -150,6 +153,7 @@ async def create_topic(
         schedule_days,
         timezone,
         sources,
+        source_guidance,
     )
     return _topic(row)  # type: ignore[arg-type]
 

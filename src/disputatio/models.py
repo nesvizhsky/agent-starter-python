@@ -36,6 +36,7 @@ class Topic(BaseModel):
     trusted_sources: list[str]
     pinned_persona: str | None
     feedback_notes: str | None
+    source_guidance: str | None
     created_at: datetime
     last_sent_at: datetime | None
     last_synthesis_at: datetime | None
