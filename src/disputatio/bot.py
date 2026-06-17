@@ -973,16 +973,18 @@ def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
     keyboard = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("▶ Check", callback_data=f"tp:check:{tid}"),
+                InlineKeyboardButton("▶ Check now", callback_data=f"tp:check:{tid}"),
                 InlineKeyboardButton(pause_lbl, callback_data=f"tp:{pause_act}:{tid}"),
-                InlineKeyboardButton("📅 Sched", callback_data=f"tp:schedule:{tid}"),
             ],
             [
                 InlineKeyboardButton("✏️ Rename", callback_data=f"tp:rename:{tid}"),
-                InlineKeyboardButton("📝 Focus", callback_data=f"tp:describe:{tid}"),
-                InlineKeyboardButton("🔄 Reset", callback_data=f"tp:reset:{tid}"),
-                InlineKeyboardButton("🗑", callback_data=f"tp:delete:{tid}"),
+                InlineKeyboardButton("📝 Research focus", callback_data=f"tp:describe:{tid}"),
             ],
+            [
+                InlineKeyboardButton("📅 Schedule", callback_data=f"tp:schedule:{tid}"),
+                InlineKeyboardButton("🔄 Reset", callback_data=f"tp:reset:{tid}"),
+            ],
+            [InlineKeyboardButton("🗑 Delete", callback_data=f"tp:delete:{tid}")],
         ]
     )
     return text, keyboard
