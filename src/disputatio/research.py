@@ -1,0 +1,137 @@
+"""Gather articles for a topic from its tracked sources.
+
+One concurrent Perplexity Sonar query per source, plus one general query that
+catches perspectives not on the tracked list. Returns a deduplicated list of
+Article objects ready for the freshness filter.
+
+Known limitation: Perplexity indexes the public web. Sources behind paywalls,
+or that Perplexity rarely crawls (some Russian state media, niche outlets), may
+not surface reliably. Direct-URL fetching is v2 scope.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from urllib.parse import urlparse
+
+from loguru import logger
+
+from agent.services.llm import Research
+from agent.services.llm import research as _research
+from disputatio.models import Article, Topic
+
+_LOOKBACK: dict[str, str] = {
+    "daily": "48 hours",
+    "twice_daily": "24 hours",
+    "weekly": "7 days",
+}
+
+
+async def gather(topic: Topic) -> list[Article]:
+    """Fetch articles for *topic* from all active sources.
+
+    Fires queries concurrently. Logs and skips any source that fails rather
+    than aborting the whole digest.
+    """
+    excluded = {s.lower() for s in topic.excluded_sources}
+    active = [s for s in topic.sources if s.lower() not in excluded]
+    lookback = _LOOKBACK.get(topic.frequency, "48 hours")
+
+    # Use description as the research query when set — it's the user's detailed focus.
+    # Fall back to name so the short label still produces sensible results.
+    query_subject = topic.description or topic.name
+    coros = [_query_source(query_subject, src, lookback) for src in active]
+    coros.append(_query_general(query_subject, lookback))
+
+    raw = await asyncio.gather(*coros, return_exceptions=True)
+
+    articles: list[Article] = []
+    seen: set[str] = set()
+    source_labels = active + ["general"]
+
+    for label, result in zip(source_labels, raw, strict=True):
+        if isinstance(result, BaseException):
+            logger.warning("research failed for {!r}: {}", label, result)
+            continue
+        for article in result:
+            if article.url not in seen:
+                seen.add(article.url)
+                articles.append(article)
+
+    logger.info(
+        "gathered {} articles for topic {!r} ({} sources + general)",
+        len(articles),
+        topic.name,
+        len(active),
+    )
+    return articles
+
+
+async def _query_source(topic_name: str, source: str, lookback: str) -> list[Article]:
+    query = (
+        f'News about "{topic_name}" from {source}, published in the last {lookback}. '
+        f"List specific articles with their exact headlines."
+    )
+    try:
+        result = await _research(query)
+    except Exception:
+        logger.exception("_research() call failed for source {!r}", source)
+        return []
+    return _parse(result, default_source=source)
+
+
+async def _query_general(topic_name: str, lookback: str) -> list[Article]:
+    query = (
+        f'"{topic_name}" — latest developments from multiple perspectives, '
+        f"published in the last {lookback}. Include a range of viewpoints."
+    )
+    try:
+        result = await _research(query)
+    except Exception:
+        logger.exception("_research() general call failed for topic {!r}", topic_name)
+        return []
+    return _parse(result, default_source="general")
+
+
+def _parse(result: Research, default_source: str) -> list[Article]:
+    """Turn a Research result into Article objects.
+
+    Each cited URL becomes one Article. The headline comes from the citation
+    title (Perplexity usually returns the article title there). The summary
+    is the headline — sufficient for embedding-based dedup; richer summaries
+    can be extracted by perspectives.py which sees the full research prose.
+    """
+    articles = []
+    for src in result.sources:
+        if not src.url:
+            continue
+        headline = src.title or _headline_from_url(src.url)
+        source = _source_from_url(src.url) if default_source == "general" else default_source
+        articles.append(
+            Article(
+                url=src.url,
+                headline=headline,
+                source=source,
+                published_at=None,  # Perplexity citations don't include dates
+                summary=headline,
+            )
+        )
+    return articles
+
+
+def _source_from_url(url: str) -> str:
+    """Extract a clean domain from a URL, e.g. 'bbc.com' from 'https://www.bbc.com/...'"""
+    try:
+        host = urlparse(url).netloc
+        return host.removeprefix("www.") or url
+    except Exception:
+        return url
+
+
+def _headline_from_url(url: str) -> str:
+    """Last resort: turn the URL path into a rough headline."""
+    try:
+        path = urlparse(url).path.rstrip("/").split("/")[-1]
+        return path.replace("-", " ").replace("_", " ").title() or url
+    except Exception:
+        return url

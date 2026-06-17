@@ -1,7 +1,7 @@
 [project]
-name = "agent"
+name = "disputatio"
 version = "0.1.0"
-description = "An AI agent starter — built the opinionated way."
+description = "Multi-perspective news bot: every story from all sides, propaganda flagged, delivered in character."
 readme = "README.md"
 authors = [
     { name = "gs", email = "george.strakhov@gmail.com" }
@@ -23,10 +23,12 @@ dependencies = [
 ]
 
 [project.scripts]
-# Run the example agent with `uv run agent`.
 agent = "agent.main:main"
-# Check your setup with `uv run agent-doctor`.
 agent-doctor = "agent.doctor:main"
+# Disputatio entrypoints
+disputatio-bot   = "disputatio.bot:main"    # polling mode (dev)
+disputatio-cron  = "disputatio.jobs_main:main"   # run due digests once (dev/test)
+disputatio-serve = "disputatio.app:main"    # FastAPI webhook + cron (prod)
 
 [build-system]
 requires = ["hatchling"]
@@ -71,6 +73,7 @@ asyncio_mode = "auto"
 # (fal_client, the cached embeddings client) bind to the loop they start on, so a
 # fresh loop per test would break them with "Event loop is closed".
 asyncio_default_test_loop_scope = "session"
+asyncio_default_fixture_loop_scope = "session"
 testpaths = ["scripts/tests"]
 # Fast/offline tests run by default. Live tests that hit real services are marked
 # "integration" and excluded here — run them explicitly with:  uv run pytest -m integration

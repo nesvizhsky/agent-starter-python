@@ -48,3 +48,54 @@ Key decisions:
 
 Verified the installed APIs before writing (pydantic-ai 1.104 deps/tools/BinaryContent; PTB 22.8
 Application/handlers/webhook) rather than trusting memory. ruff + pyright clean; 9 offline tests.
+
+## 2026-06-16 — perspectives.py: fast model can't cluster reliably
+
+Gemini Flash Lite ("fast" tier) failed to recognise "Russia fires missiles at Kyiv" (BBC)
+and "Russia conducts precision strike on military targets in Kyiv" (TASS) as the same event —
+it kept them as separate stories. Upgraded clustering to "balanced" (Claude Sonnet) with a
+more explicit prompt that gives a concrete example of same-event-different-framing. Tests pass.
+
+Trade-off: "balanced" costs ~30× more per call than "fast", but clustering input is small
+(~10–20 article headlines) and only runs once per digest. Absolute cost is still negligible.
+Lesson: for tasks that require semantic reasoning across differently-framed text, fast/cheap
+models are not reliable enough. Use "balanced" minimum for anything that needs to understand
+meaning across framings.
+
+## 2026-06-16 — Disputatio: stages 1–5 complete, ready to build
+
+Named the project Disputatio (medieval academic debate form: argue all sides, community decides).
+Greek philosophy vibe layered in: Socratic method, dialectic structure, the agora as metaphor.
+
+Key design decisions locked in:
+- **Multi-perspective + propaganda analysis on all topics/sources**: the core differentiator.
+  Propaganda module reports signals found, never verdicts; same criteria applied to every source.
+- **Freshness filter**: two passes — URL match + semantic similarity via pgvector embeddings.
+  Catches the same event republished under different headlines.
+- **Personas**: 16 characters, each with a pre-generated avatar image in R2 and a character
+  intro card. Randomized per digest, user can pin one per topic.
+- **Feedback**: quick tap row (5 signals) + extended free-text correction offered on negative
+  taps. Free text parsed into structured prefs + stored as notes in topic.feedback_notes.
+- **Weekly synthesis**: separate agent call on `build_model("smart")` — the one expensive
+  call, justified because it synthesises a week into something genuinely new.
+- **Repo renamed** from `agent-starter-python` to `disputatio` — this is the main project,
+  not an example. Docs moved from `examples/disputatio/docs/` to root `docs/`.
+
+Architecture: 10 modules in `src/disputatio/`, clean dependency chain, build + test in order.
+Next: build migration 001 + store.py (step 1–2 of build order).
+
+## 2026-06-17 — Fixed "Message is too long" crash in digest delivery
+
+Bug: `telegram.error.BadRequest: Message is too long` in `jobs._send_digest`. The digest `main`
+field allows 800 words, but 800 × ~5 chars = ~4000 chars — right at Telegram's 4096-char hard
+limit. When the LLM ran slightly long, it crashed. The subsequent `ConnectError` spam was just
+the bot retrying after the crash, not a separate issue.
+
+Fix (two parts):
+1. `jobs.py`: added `_chunk_text()` that splits on paragraph boundaries into ≤4096-char pieces.
+   `_send_digest` now sends each chunk as a separate message, attaching the feedback keyboard
+   only to the last one.
+2. `digest.py`: tightened the word-count instruction from 800 → 600 words (also in the
+   `DigestOutput.main` field description). At 600 words the expected character count is ~3000,
+   giving a real buffer. The chunking is the reliable fix; the word-count tightening reduces
+   the chance of hitting it in the first place.

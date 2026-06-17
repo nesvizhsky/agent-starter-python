@@ -1,21 +1,27 @@
 # Problem
 
-**Stage 1 — Identify the limits of your current agency.**
+> Stage 1: Identify the limits of your current agency.
 
-Before building anything, get clear on what you *can't* do well today that an agent
-could help with. The sharper the problem, the better the agent.
+## The agency gap
 
-## Prompts to answer
+Staying genuinely informed on a contested topic requires:
 
-- What task is **tedious, slow, or impossible** for you (or your user) right now?
-- How is it done today, and what specifically goes wrong or takes too long?
-- Why is *now* a good time — what makes an AI agent able to help here?
-- Who feels this pain? How often? How much does it cost them (time, money, stress)?
+1. Reading multiple sources with opposing agendas
+2. Recognizing when a source is using rhetorical manipulation
+3. Distinguishing genuinely new developments from recycled narratives
+4. Finding time to do all of this daily
 
-## The problem, in your words
+Almost nobody does all four. The default outcome is an accidental filter bubble: you read
+the outlets that already agree with you, you see the same story repackaged across them,
+and you never notice the framing choices being made on your behalf.
 
-_(Write a short paragraph. Be concrete — name a real situation, not a category.)_
+This is especially acute for high-stakes topics (wars, elections, court cases) where
+the gap between what different sides *say is happening* is itself the most important fact.
 
-## Why an agent (not just a script or a human)
+## What we want to outsource
 
-_(What does the "intelligence" actually buy you here?)_
+The legwork of being a rigorous, multi-perspective reader — gathering, deduplicating,
+structuring, and analyzing the same story from adversarial sources — delivered in a way
+that is engaging enough to actually read.
+
+The user keeps the judgment. The bot does the fieldwork.

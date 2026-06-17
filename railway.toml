@@ -1,9 +1,4 @@
-# Deploy config for THIS deployment (the inspiration_bot Telegram example).
-# The Dockerfile's default command runs src/agent/web.py; this overrides it to run
-# the bot's FastAPI app, which serves the Telegram webhook + the POST /cron/tick endpoint.
-#
-# NOTE: Railway runs startCommand WITHOUT a shell, so "$PORT" would NOT expand.
-# We don't pass --port at all — `fastapi run` reads the PORT env var that Railway
-# injects, and already defaults --host to 0.0.0.0.
+# Deploy config for Disputatio.
+# `fastapi run` reads the PORT env var Railway injects; no --port needed.
 [deploy]
-startCommand = "fastapi run examples/inspiration_bot/app.py"
+startCommand = "fastapi run src/disputatio/app.py"
