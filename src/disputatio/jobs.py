@@ -268,11 +268,8 @@ async def _run_synthesis(topic: Topic, bot: Bot) -> None:
     if result is None:
         logger.info("not enough digests to synthesise {!r}", topic.name)
         return
-    await bot.send_message(
-        chat_id=topic.telegram_id,
-        text=_format_synthesis(result),
-        parse_mode="Markdown",
-    )
+    for chunk in _chunk_text(_format_synthesis(result)):
+        await bot.send_message(chat_id=topic.telegram_id, text=chunk, parse_mode="Markdown")
     await store.stamp_synthesis(topic.id)
     logger.info("synthesis sent for topic {}", topic.id)
 

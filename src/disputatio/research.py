@@ -55,6 +55,7 @@ _BLOCKED_GENERAL_DOMAINS: frozenset[str] = frozenset(
         "promptailearning.com",
         "unrot.com",
         "verdantix.com",
+        "dentro.de",
     }
 )
 
@@ -177,13 +178,14 @@ async def _query_source(topic_name: str, source: str, lookback: str, today: str)
 
 
 _GENERAL_QUERY_INSTRUCTIONS = (
-    "Prioritise established news outlets (newspapers, wire services such as Reuters, AP, AFP, "
-    "broadcast news), scientific publications (Nature, Science, Cell, arXiv, The Lancet, "
-    "NEJM, ScienceDaily, PhysOrg, New Scientist), and official institutional or government sources. "  # noqa: E501
+    "Prioritise: established newspapers and wire services (Reuters, AP, AFP, BBC, Guardian, NYT, FT); "  # noqa: E501
+    "specialist technology and science journalism (Ars Technica, Wired, MIT Technology Review, "
+    "The Verge, TechCrunch, IEEE Spectrum, VentureBeat, New Scientist, Nature, Science, "
+    "ScienceDaily, PhysOrg, The Lancet, NEJM, arXiv); and official institutional or government sources. "  # noqa: E501
     "Include new research findings, studies, and scientific discoveries when relevant. "
-    "Do not cite: YouTube videos, company blogs, marketing or promotional content, "
-    "social media posts, analyst market-research reports, or aggregator listicles. "
-    "Each citation must be a primary news report or original publication, not a summary of other news."  # noqa: E501
+    "Do not cite: YouTube, company press releases or blogs, marketing content, "
+    "social media, analyst market-research reports, or aggregator listicles. "
+    "Each citation must be a primary news report or original publication — not a roundup of other news."  # noqa: E501
 )
 
 

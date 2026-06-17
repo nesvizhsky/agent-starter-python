@@ -54,6 +54,7 @@ class DigestOutput(BaseModel):
 class _Deps:
     voice: str
     feedback_notes: str | None
+    today: str
 
 
 _agent: Agent[_Deps, DigestOutput] = Agent(
@@ -77,7 +78,7 @@ def _system_prompt(ctx: RunContext[_Deps]) -> str:
         "CHARACTER VOICE — stay in this throughout:\n"
         f"{ctx.deps.voice}\n\n"
         "FORMAT for main — Telegram HTML only:\n"
-        "<b>📌 [sentence-case headline]</b> <i>· Jun 17</i>  ← include date if known, omit if not\n"
+        f"<b>📌 [headline]</b> <i>· Jun 17</i>  ← event date if known, else {ctx.deps.today}\n"
         "[One sentence: the key fact. What, who, where.]\n"
         '• <a href="URL"><i>Source A</i></a> — [what they specifically said/claimed]\n'
         '• <a href="URL"><i>Source B</i></a> — [their framing] 🚩 <i>state framing</i>\n'
@@ -118,8 +119,11 @@ async def generate(
     stories: output of propaganda.analyze() — signals already populated.
     feedback_notes: raw text from topic.feedback_notes (user corrections).
     """
+    from datetime import UTC, datetime
+
+    today = datetime.now(UTC).strftime("%b %d")
     prompt = _format_prompt(stories) if stories else _NO_NEWS_PROMPT
-    deps = _Deps(voice=persona.voice, feedback_notes=feedback_notes)
+    deps = _Deps(voice=persona.voice, feedback_notes=feedback_notes, today=today)
     result = await _agent.run(prompt, deps=deps)
     return result.output
 
