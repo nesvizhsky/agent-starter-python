@@ -16,8 +16,9 @@ from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 from loguru import logger
+from pydantic_ai import Agent
 
-from agent.services.llm import Research
+from agent.services.llm import Research, build_model
 from agent.services.llm import research as _research
 from disputatio.models import Article, Topic
 
@@ -31,6 +32,43 @@ _LOOKBACK: dict[str, str] = {
     "weekly": "7 days",
     "biweekly": "14 days",
 }
+
+_expander: Agent[None, str] = Agent(
+    build_model("fast"),
+    output_type=str,
+    system_prompt=(
+        "Refine a user's rough topic description into a focused research query for a news monitoring bot. "  # noqa: E501
+        "Output one or two plain sentences describing exactly what to track: the specific domain, "
+        "key actors, and types of events or developments to look for. "
+        "Preserve the user's intent fully — do not narrow the scope or add assumptions. "
+        "If the input is already precise and specific, keep it with minimal changes. "
+        "No bullet points. No intro phrases like 'Track' or 'Monitor'. Just the query.\n\n"
+        "Examples:\n"
+        "- 'war in israel-palestine' → "
+        "'Israel-Palestine conflict: military operations, ceasefire negotiations, "
+        "civilian casualties, and political developments in Gaza and the West Bank'\n"
+        "- 'ecology laws' → "
+        "'International environmental legislation: new laws, regulations, and policy "
+        "changes on ecology, biodiversity, and climate'\n"
+        "- 'AI stuff' → "
+        "'Artificial intelligence: new model releases, regulation, safety research, "
+        "industry moves, and major applications'"
+    ),
+)
+
+
+async def expand_query(raw: str, topic_name: str) -> str:
+    """Refine a rough user description into a focused research query.
+
+    Falls back to the raw input if the LLM call fails.
+    """
+    prompt = f"Topic name: {topic_name or raw}\nUser description: {raw}"
+    try:
+        result = await _expander.run(prompt)
+        return result.output.strip()
+    except Exception:  # noqa: BLE001
+        logger.warning("query expansion failed for {!r} — using raw input", topic_name)
+        return raw
 
 
 async def gather(topic: Topic) -> list[Article]:

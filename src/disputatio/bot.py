@@ -9,6 +9,8 @@ In production the same handlers run via webhook — see app.py.
 
 from __future__ import annotations
 
+import asyncio
+
 from loguru import logger
 from pydantic_ai import Agent
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
@@ -27,7 +29,7 @@ from telegram.ext import (
 from agent.config import get_settings
 from agent.logging_setup import setup_logging
 from agent.services.llm import build_model
-from disputatio import jobs, store
+from disputatio import jobs, research, store
 from disputatio.models import Topic
 from disputatio.personas import all_keys
 
@@ -197,17 +199,24 @@ async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not desc:
         await update.message.reply_text("Please describe what you want to track.")
         return _AT_DESC
-    context.user_data["new_topic_desc"] = desc
-
     await update.message.chat.send_action(ChatAction.TYPING)
-    try:
-        name = await _generate_name(desc)
-    except Exception:  # noqa: BLE001
-        name = " ".join(desc.split()[:4]).rstrip(".,!?")
+    results = await asyncio.gather(
+        _generate_name(desc),
+        research.expand_query(desc, ""),
+        return_exceptions=True,
+    )
+    name = (
+        results[0]
+        if not isinstance(results[0], BaseException)
+        else " ".join(desc.split()[:4]).rstrip(".,!?")
+    )
+    expanded = results[1] if not isinstance(results[1], BaseException) else desc
 
     context.user_data["new_topic_name"] = name
+    context.user_data["new_topic_desc"] = expanded
+
     await update.message.reply_text(
-        f"📌 *{name}*\n\nLooks good as the topic name?",
+        f"📌 *{name}*\n🔍 _{expanded}_\n\nName and research query look good?",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
@@ -921,8 +930,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context.user_data["awaiting_describe_name"] = topic.name
         current = topic.description or topic.name
         await query.message.reply_text(  # type: ignore[union-attr]
-            f"Type the new research focus for *{_short(topic.name)}*:\n"
-            f"Current: _{current}_\n_(/cancel to abort)_",
+            f"*Research query for {_short(topic.name)}:*\n_{current}_\n\nType a replacement, or /cancel.",  # noqa: E501
             parse_mode="Markdown",
         )
 
@@ -980,7 +988,7 @@ def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
             ],
             [
                 InlineKeyboardButton("✏️ Rename", callback_data=f"tp:rename:{tid}"),
-                InlineKeyboardButton("📝 Focus", callback_data=f"tp:describe:{tid}"),
+                InlineKeyboardButton("🔍 Query", callback_data=f"tp:describe:{tid}"),
             ],
             [
                 InlineKeyboardButton("📅 Sched", callback_data=f"tp:schedule:{tid}"),
@@ -1425,9 +1433,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         topic_id = UUID(ud.pop("awaiting_describe_id"))
         topic_name = ud.pop("awaiting_describe_name", "")
-        await store.update_topic(topic_id, description=text)
+        await update.message.chat.send_action(ChatAction.TYPING)
+        expanded = await research.expand_query(text, topic_name)
+        await store.update_topic(topic_id, description=expanded)
         await update.message.reply_text(
-            f"✓ *{topic_name}* will now research:\n_{text}_\n\n"
+            f"✓ *{topic_name}* will now research:\n_{expanded}_\n\n"
             "Use /reset then /check to fetch fresh results.",
             parse_mode="Markdown",
         )
