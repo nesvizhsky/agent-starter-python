@@ -413,6 +413,45 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ---------------------------------------------------------------------------
+# /rename — give a topic a shorter display name
+# ---------------------------------------------------------------------------
+
+
+async def cmd_rename(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or not await _allowed(update):
+        return
+    tg = update.effective_user
+    if tg is None:
+        return
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Usage: /rename <current name> | <new short label>\n"
+            "Example: /rename Russia-Ukraine | War in Ukraine",
+            parse_mode="Markdown",
+        )
+        return
+    raw = " ".join(args)
+    if "|" not in raw:
+        await update.message.reply_text(
+            "Separate the current name and new label with `|`.\n"
+            "Example: /rename Russia-Ukraine | War",
+            parse_mode="Markdown",
+        )
+        return
+    old_name, new_name = (p.strip() for p in raw.split("|", 1))
+    topic = await store.get_topic_by_name(tg.id, old_name)
+    if topic is None:
+        await update.message.reply_text(f"No topic called *{old_name}*.", parse_mode="Markdown")
+        return
+    updates: dict[str, object] = {"name": new_name}
+    if not topic.description:
+        updates["description"] = topic.name
+    await store.update_topic(topic.id, **updates)
+    await update.message.reply_text(f"✓ Renamed to *{new_name}*.", parse_mode="Markdown")
+
+
+# ---------------------------------------------------------------------------
 # /synthesis <name>
 # ---------------------------------------------------------------------------
 
@@ -661,6 +700,7 @@ async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
             BotCommand("del_source", "Remove a source: /del_source <topic> <source>"),
             BotCommand("persona", "Pin a persona: /persona <topic> <key>"),
             BotCommand("reset", "Clear seen articles: /reset <topic>"),
+            BotCommand("rename", "Rename a topic: /rename <old> | <new>"),
         ]
     )
 
@@ -703,6 +743,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CommandHandler("del_source", cmd_del_source))
     app.add_handler(CommandHandler("persona", cmd_persona))
     app.add_handler(CommandHandler("reset", cmd_reset))
+    app.add_handler(CommandHandler("rename", cmd_rename))
     app.add_handler(CallbackQueryHandler(on_topic_action, pattern=r"^ta:"))
     app.add_handler(CallbackQueryHandler(on_feedback, pattern=r"^fb:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
