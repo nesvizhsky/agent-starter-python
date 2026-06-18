@@ -919,10 +919,11 @@ async def _show_sources_view(query: object, topic: Topic) -> None:
     msg = "\n".join(lines)
 
     rows: list[list[InlineKeyboardButton]] = []
-    for s in tracked:
-        rows.append([InlineKeyboardButton(f"✖ {s}", callback_data=f"tp:rm_src:{tid}:{s}")])
-    for s in ignored:
-        rows.append([InlineKeyboardButton(f"🚫 {s}", callback_data=f"tp:rm_blk:{tid}:{s}")])
+    # Use index instead of source name to stay within Telegram's 64-byte callback_data limit.
+    for i, s in enumerate(tracked):
+        rows.append([InlineKeyboardButton(f"✖ {s}", callback_data=f"tp:rm_src:{tid}:{i}")])
+    for i, s in enumerate(ignored):
+        rows.append([InlineKeyboardButton(f"🚫 {s}", callback_data=f"tp:rm_blk:{tid}:{i}")])
     rows.append([
         InlineKeyboardButton("➕ Always check", callback_data=f"tp:add_src:{tid}"),
         InlineKeyboardButton("🚫 Always ignore", callback_data=f"tp:add_blk:{tid}"),
@@ -973,7 +974,10 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Also send a separate status message below the card
         status = await context.bot.send_message(
             chat_id=topic.telegram_id,
-            text=f"⏳ *Fetching digest for {topic.name}…*",
+            text=(
+                f"⏳ *Fetching digest for {topic.name}…*\n"
+                "_This takes 1–2 minutes. Other commands won't respond until it's done._"
+            ),
             parse_mode="Markdown",
         )
         failed = False
@@ -1039,9 +1043,13 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _show_sources_view(query, topic)
 
     elif action == "rm_src":
-        source = (query.data or "").split(":", 3)[3]
-        updated = [s for s in topic.sources if s != source]
-        await store.update_topic(topic.id, sources=updated)
+        idx_str = (query.data or "").split(":", 3)[3]
+        try:
+            idx = int(idx_str)
+            updated = [s for i, s in enumerate(topic.sources) if i != idx]
+            await store.update_topic(topic.id, sources=updated)
+        except (ValueError, IndexError):
+            pass
         refreshed = await store.get_topic(query.from_user.id, topic.id)
         if refreshed:
             await _show_sources_view(query, refreshed)
@@ -1056,9 +1064,13 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
     elif action == "rm_blk":
-        source = (query.data or "").split(":", 3)[3]
-        updated = [s for s in topic.excluded_sources if s != source]
-        await store.update_topic(topic.id, excluded_sources=updated)
+        idx_str = (query.data or "").split(":", 3)[3]
+        try:
+            idx = int(idx_str)
+            updated = [s for i, s in enumerate(topic.excluded_sources) if i != idx]
+            await store.update_topic(topic.id, excluded_sources=updated)
+        except (ValueError, IndexError):
+            pass
         refreshed = await store.get_topic(query.from_user.id, topic.id)
         if refreshed:
             await _show_sources_view(query, refreshed)

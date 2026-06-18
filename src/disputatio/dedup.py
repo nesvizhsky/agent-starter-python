@@ -25,9 +25,14 @@ from disputatio.models import Article
 SIMILARITY_THRESHOLD = 0.85  # cosine similarity above which we treat two articles as the same story
 
 _LOOKBACK_DAYS: dict[str, int] = {
-    "daily": 2,
     "twice_daily": 1,
+    "daily": 2,
+    "weekdays": 2,
+    "mwf": 3,
+    "tuth": 3,
+    "custom_days": 3,
     "weekly": 7,
+    "biweekly": 14,
 }
 
 

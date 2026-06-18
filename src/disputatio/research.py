@@ -44,6 +44,20 @@ _LOOKBACK: dict[str, str] = {
     "biweekly": "14 days",
 }
 
+# Maps frequency to Perplexity's search_recency_filter value.
+# Belt-and-suspenders alongside search_after_date_filter — more reliably
+# forwarded by OpenRouter than the date-based filter.
+_RECENCY_FILTER: dict[str, str] = {
+    "twice_daily": "day",
+    "daily": "day",       # "day" is 24h; prompt+date filter cover the 24-48h gap
+    "weekdays": "day",
+    "mwf": "week",
+    "tuth": "week",
+    "custom_days": "week",
+    "weekly": "week",
+    "biweekly": "month",
+}
+
 # Domains excluded from the *general* query results only.
 # User-configured sources are never filtered this way.
 _BLOCKED_GENERAL_DOMAINS: frozenset[str] = frozenset(
@@ -129,8 +143,9 @@ async def gather(topic: Topic) -> list[Article]:
     query_subject = topic.description or topic.name
     source_instr = topic.source_guidance or _GENERAL_QUERY_INSTRUCTIONS
     today = datetime.now(UTC).strftime("%B %d, %Y")
-    coros = [_query_source(query_subject, src, lookback, today) for src in active]
-    coros.append(_query_general(query_subject, lookback, today, source_instr))
+    recency = _RECENCY_FILTER.get(topic.frequency, "week")
+    coros = [_query_source(query_subject, src, lookback, today, recency) for src in active]
+    coros.append(_query_general(query_subject, lookback, today, source_instr, recency))
 
     raw = await asyncio.gather(*coros, return_exceptions=True)
 
@@ -176,21 +191,39 @@ def _cutoff_date(lookback: str) -> str:
     return dt.strftime("%m/%d/%Y")
 
 
-async def _query_source(topic_name: str, source: str, lookback: str, today: str) -> list[Article]:
+def _source_label(source: str) -> str:
+    """Strip user annotations from a source name, keeping only the outlet name.
+
+    Users sometimes store sources as 'медуза - российская оппозиция' for their
+    own reference. Only the part before ' - ' or ' — ' is the actual outlet name.
+    """
+    for sep in (" — ", " - "):
+        if sep in source:
+            return source.split(sep, 1)[0].strip()
+    return source.strip()
+
+
+async def _query_source(
+    topic_name: str, source: str, lookback: str, today: str, recency: str = "week"
+) -> list[Article]:
     cutoff = _cutoff_date(lookback)
+    outlet = _source_label(source)
     query = (
         f"Today is {today}. Only include articles published after {cutoff}. "
-        f"What specifically happened with {topic_name!r} according to {source} "
+        f"What specifically happened with {topic_name!r} according to {outlet} "
         f"in the last {lookback}? "
         f"Do not include older background or historical context — only concrete recent events, "
         f"statements, or decisions. Cite specific article headlines."
     )
     try:
-        result = await _research(query, search_after_date=cutoff)
+        result = await _research(query, search_after_date=cutoff, search_recency_filter=recency)
     except Exception:
         logger.exception("_research() call failed for source {!r}", source)
         return []
-    return _parse(result, default_source=source)
+    articles = _parse(result, default_source=source)
+    logger.debug("source {!r} → {} articles: {}", source, len(articles),
+                 [a.headline[:60] for a in articles])
+    return articles
 
 
 _SOURCE_EXCLUSIONS = (
@@ -249,7 +282,7 @@ async def generate_source_guidance(description: str, topic_name: str) -> str:
 
 
 async def _query_general(
-    topic_name: str, lookback: str, today: str, source_instr: str
+    topic_name: str, lookback: str, today: str, source_instr: str, recency: str = "week"
 ) -> list[Article]:
     cutoff = _cutoff_date(lookback)
     query = (
@@ -260,11 +293,14 @@ async def _query_general(
         f"{source_instr}"
     )
     try:
-        result = await _research(query, search_after_date=cutoff)
+        result = await _research(query, search_after_date=cutoff, search_recency_filter=recency)
     except Exception:
         logger.exception("_research() general call failed for topic {!r}", topic_name)
         return []
-    return _parse(result, default_source="general", block_domains=_BLOCKED_GENERAL_DOMAINS)
+    articles = _parse(result, default_source="general", block_domains=_BLOCKED_GENERAL_DOMAINS)
+    logger.debug("general query → {} articles: {}", len(articles),
+                 [a.headline[:60] for a in articles])
+    return articles
 
 
 def _parse(
