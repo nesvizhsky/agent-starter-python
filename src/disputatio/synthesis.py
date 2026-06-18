@@ -82,7 +82,11 @@ _agent: Agent[None, SynthesisOutput] = Agent(
 # ---------------------------------------------------------------------------
 
 
-async def generate(topic_name: str, digests: list[Digest]) -> SynthesisOutput | None:
+async def generate(
+    topic_name: str,
+    digests: list[Digest],
+    language: str = "English",
+) -> SynthesisOutput | None:
     """Synthesise *digests* into a weekly analysis for *topic_name*.
 
     Returns None if there are fewer than 2 digests — not enough to synthesise.
@@ -91,7 +95,8 @@ async def generate(topic_name: str, digests: list[Digest]) -> SynthesisOutput | 
         return None
 
     prompt = _format_prompt(topic_name, digests)
-    result = await _agent.run(prompt)
+    lang_note = f"\n\nWrite the entire synthesis in {language}." if language != "English" else ""
+    result = await _agent.run(prompt + lang_note)
     return result.output
 
 

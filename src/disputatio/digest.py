@@ -44,6 +44,7 @@ class DigestOutput(BaseModel):
 class _Deps:
     feedback_notes: str | None
     today: str
+    language: str
 
 
 _agent: Agent[_Deps, DigestOutput] = Agent(
@@ -60,11 +61,14 @@ def _system_prompt(ctx: RunContext[_Deps]) -> str:
         if ctx.deps.feedback_notes
         else ""
     )
+    lang = ctx.deps.language
     return (
         "You are writing a news digest for Disputatio, a multi-perspective intelligence bot. "
         "Your job: present today's stories clearly and factually, showing what different sources "
         "said side by side — so the reader can see the full picture and judge for themselves. "
         "Be precise and neutral. Never take sides on contested events.\n\n"
+        f"Write the entire digest in {lang}. Translate everything — headlines, summaries, "
+        f"source bullets, signal labels — into {lang}.\n\n"
         "FORMAT for main — Telegram HTML only:\n"
         f"<b>📌 [headline]</b> <i>· Jun 17</i>  ← event date if known, else {ctx.deps.today}\n"
         "[One sentence: the key fact. What, who, where.]\n"
@@ -100,6 +104,7 @@ def _system_prompt(ctx: RunContext[_Deps]) -> str:
 async def generate(
     stories: list[Story],
     feedback_notes: str | None = None,
+    language: str = "English",
 ) -> DigestOutput:
     """Write the digest.
 
@@ -110,7 +115,7 @@ async def generate(
 
     today = datetime.now(UTC).strftime("%b %d")
     prompt = _format_prompt(stories) if stories else _NO_NEWS_PROMPT
-    deps = _Deps(feedback_notes=feedback_notes, today=today)
+    deps = _Deps(feedback_notes=feedback_notes, today=today, language=language)
     result = await _agent.run(prompt, deps=deps)
     return result.output
 

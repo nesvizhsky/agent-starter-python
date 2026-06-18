@@ -89,6 +89,22 @@ async def get_or_create_user(
     return User.model_validate(dict(row))  # type: ignore[arg-type]
 
 
+async def get_user_language(telegram_id: int) -> str:
+    row = await db.fetchrow(
+        "SELECT language FROM disputatio_users WHERE telegram_id = $1",
+        telegram_id,
+    )
+    return str(row["language"]) if row else "English"
+
+
+async def set_user_language(telegram_id: int, language: str) -> None:
+    await db.execute(
+        "UPDATE disputatio_users SET language = $1 WHERE telegram_id = $2",
+        language,
+        telegram_id,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Topics
 # ---------------------------------------------------------------------------

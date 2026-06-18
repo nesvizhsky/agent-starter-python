@@ -1207,6 +1207,65 @@ async def cmd_timezone(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ---------------------------------------------------------------------------
+# /language
+# ---------------------------------------------------------------------------
+
+_LANGUAGE_OPTIONS = [
+    ("🇬🇧 English", "English"),
+    ("🇷🇺 Russian", "Russian"),
+    ("🇪🇸 Spanish", "Spanish"),
+    ("🇫🇷 French", "French"),
+    ("🇩🇪 German", "German"),
+    ("🇸🇦 Arabic", "Arabic"),
+    ("🇨🇳 Chinese", "Chinese"),
+    ("🇵🇹 Portuguese", "Portuguese"),
+]
+
+
+async def cmd_language(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or not await _allowed(update):
+        return
+    tg = update.effective_user
+    if tg is None:
+        return
+    current = await store.get_user_language(tg.id)
+    buttons = [
+        [InlineKeyboardButton(  # noqa: E501
+            f"{'✓ ' if lang == current else ''}{label}", callback_data=f"lang:{lang}"
+        )]
+        for label, lang in _LANGUAGE_OPTIONS
+    ]
+    buttons.append([InlineKeyboardButton("✏️ Other — type it", callback_data="lang:__other__")])
+    await update.message.reply_text(
+        f"Current language: *{current}*\n\nChoose the language for your digests:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+        parse_mode="Markdown",
+    )
+
+
+async def _cb_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+    await query.answer()
+    tg = update.effective_user
+    if tg is None:
+        return
+    lang = query.data[len("lang:"):]
+    if lang == "__other__":
+        context.user_data["awaiting_language"] = True  # type: ignore[index]
+        await query.edit_message_text(
+            "Type the language you want (e.g. *Italian*, *Japanese*, *Ukrainian*):",
+            parse_mode="Markdown",
+        )
+        return
+    await store.set_user_language(tg.id, lang)
+    await query.edit_message_text(
+        f"✓ Digests will now be written in *{lang}*.", parse_mode="Markdown"
+    )
+
+
+# ---------------------------------------------------------------------------
 # /check
 # ---------------------------------------------------------------------------
 
@@ -1557,9 +1616,21 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "awaiting_block_id",
             "awaiting_block_name",
             "new_topic_source_guidance",
+            "awaiting_language",
         ):
             ud.pop(key, None)
         await update.message.reply_text("Cancelled.")
+        return
+
+    # Free-text language input (triggered by "Other" in /language)
+    if ud is not None and ud.get("awaiting_language"):
+        tg = update.effective_user
+        if tg is not None and text:
+            ud["awaiting_language"] = False
+            await store.set_user_language(tg.id, text)
+            await update.message.reply_text(
+                f"✓ Digests will now be written in *{text}*.", parse_mode="Markdown"
+            )
         return
 
     # Inline rename (triggered by ✏️ Rename button on topic card)
@@ -1673,6 +1744,7 @@ async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
             BotCommand("more", "Full analysis from last digest"),
             BotCommand("synthesis", "Weekly synthesis for a topic"),
             BotCommand("timezone", "Update timezone for a topic"),
+            BotCommand("language", "Set digest language"),
         ]
     )
 
@@ -1732,12 +1804,14 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CommandHandler("rename", cmd_rename))
     app.add_handler(CommandHandler("describe", cmd_describe))
     app.add_handler(CommandHandler("delete_topic", cmd_delete_topic))
+    app.add_handler(CommandHandler("language", cmd_language))
     app.add_handler(CallbackQueryHandler(on_start_nav, pattern=r"^start:(topics|check)$"))
     app.add_handler(CallbackQueryHandler(on_topic_panel, pattern=r"^tp:"))
     app.add_handler(CallbackQueryHandler(on_topic_action, pattern=r"^ta:"))
     app.add_handler(CallbackQueryHandler(on_topic_delete_confirm, pattern=r"^td:"))
     app.add_handler(CallbackQueryHandler(on_tz_set, pattern=r"^tzset:"))
     app.add_handler(CallbackQueryHandler(on_feedback, pattern=r"^fb:"))
+    app.add_handler(CallbackQueryHandler(_cb_language, pattern=r"^lang:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     return app

@@ -235,7 +235,8 @@ async def _run_digest(topic: Topic, bot: Bot) -> None:
     lookback = research._LOOKBACK.get(topic.frequency, "48 hours")
     stories = await perspectives.cluster(fresh, topic_name=topic.name, lookback=lookback)
     stories = await propaganda.analyze(stories)
-    output = await digest.generate(stories, topic.feedback_notes)
+    language = await store.get_user_language(topic.telegram_id)
+    output = await digest.generate(stories, topic.feedback_notes, language)
 
     digest_id = await store.record_digest(topic.id, topic.telegram_id, output.main, "none")
     await store.record_seen(topic.id, fresh, embeddings)
@@ -254,7 +255,8 @@ async def _run_synthesis(topic: Topic, bot: Bot) -> None:
     """Weekly synthesis for one topic. Raises on failure (caller isolates)."""
     logger.info("synthesis pipeline: topic={} name={!r}", topic.id, topic.name)
     digests = await store.get_recent_digests(topic.id, days=7)
-    result = await synthesis.generate(topic.name, digests)
+    language = await store.get_user_language(topic.telegram_id)
+    result = await synthesis.generate(topic.name, digests, language)
     if result is None:
         logger.info("not enough digests to synthesise {!r}", topic.name)
         return
