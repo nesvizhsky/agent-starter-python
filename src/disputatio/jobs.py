@@ -204,18 +204,8 @@ async def _send_digest(
     output: digest.DigestOutput,
     digest_id: UUID,
 ) -> None:
-    try:
-        url = avatar_url(persona)
-        await bot.send_photo(
-            chat_id=topic.telegram_id,
-            photo=url,
-            caption=f"*{persona.name}* — {persona.intro}",
-            parse_mode="Markdown",
-        )
-    except Exception:  # noqa: BLE001
-        logger.debug("avatar photo failed for {} — sending text only", persona.key)
-
-    byline = f"<b>{topic.name}</b>\n<b>{persona.name}</b> · <i>{persona.label}</i>\n\n"
+    # 1. Topic name + stories — no persona yet.
+    byline = f"<b>{topic.name}</b>\n\n"
     chunks = _chunk_text(output.main)
     for i, chunk in enumerate(chunks):
         text = (byline + chunk) if i == 0 else chunk
@@ -225,14 +215,31 @@ async def _send_digest(
             logger.warning("HTML parse failed for chunk {}/{} — retrying plain", i + 1, len(chunks))
             await bot.send_message(chat_id=topic.telegram_id, text=text)
 
-    if output.character_note:
+    # 2. Persona photo + character comment — after all stories.
+    photo_sent = False
+    try:
+        url = avatar_url(persona)
+        caption = f"*{persona.name}* — {persona.intro}"
+        if output.character_note:
+            caption += f"\n\n_{output.character_note}_"
+        await bot.send_photo(
+            chat_id=topic.telegram_id,
+            photo=url,
+            caption=caption,
+            parse_mode="Markdown",
+        )
+        photo_sent = True
+    except Exception:  # noqa: BLE001
+        logger.debug("avatar photo failed for {} — sending text only", persona.key)
+
+    if not photo_sent and output.character_note:
         note = f"💬 <b>{persona.name}:</b>\n<i>{output.character_note}</i>"
         try:
             await bot.send_message(chat_id=topic.telegram_id, text=note, parse_mode="HTML")
         except BadRequest:
             await bot.send_message(chat_id=topic.telegram_id, text=output.character_note)
 
-    # Show topic action buttons after the digest content.
+    # 3. Topic card with action buttons.
     query_text = topic.description or topic.name
     last = topic.last_sent_at.strftime("%d %b") if topic.last_sent_at else "now"
     card_text = f"📌 *{topic.name}*\n_{query_text}  ·  {last}_"
