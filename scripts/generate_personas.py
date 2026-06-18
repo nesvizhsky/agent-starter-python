@@ -34,52 +34,40 @@ def _p(subject: str) -> str:
 
 
 _PROMPTS: dict[str, str] = {
-    "socrates": _p("Ancient Greek philosopher Socrates, white beard, toga, thoughtful gaze."),
-    "monk": _p(
-        "Medieval monk Brother Anselm, brown habit, quill in hand, candlelight,"
-        " illuminated manuscript."
+    "socrates": _p(
+        "Ancient Greek philosopher Socrates, white beard, toga, thoughtful questioning gaze."
     ),
-    "terminator": _p(
-        "T-800 Terminator robot head with glowing red eye, metallic endoskeleton, dark background."
+    "stoic": _p(
+        "Roman emperor Marcus Aurelius, calm and composed expression, laurel wreath,"
+        " armour, steady eyes that have seen much."
     ),
-    "shakespeare": _p(
-        "William Shakespeare, Elizabethan ruff collar, quill, dramatic theatrical expression."
+    "pragmatist": _p(
+        "Sharp-eyed modern thinker in plain clothes, sleeves rolled up, direct no-nonsense"
+        " expression, holding a single sheet of paper with notes."
     ),
-    "sherlock": _p(
-        "Sherlock Holmes, deerstalker hat, magnifying glass, sharp eyes, Victorian London."
+    "empiricist": _p(
+        "Precise analytical figure in wire-rimmed glasses, lab coat, holding a magnifying"
+        " glass over a document, meticulous and calm."
     ),
-    "senator": _p("Roman Senator in toga, laurel wreath, stern expression, marble columns."),
-    "gonzo": _p(
-        "Gonzo journalist with aviator sunglasses, cigarette holder, press badge, chaotic energy."
+    "irina": _p(
+        "Woman in her 40s, Eastern European features, knowing and measured expression,"
+        " dark turtleneck, slight weariness in sharp eyes."
     ),
-    "spin_doctor": _p(
-        "Slick corporate PR consultant in sharp suit, megaphone, glossy smile, city skyline."
+    "viktor": _p(
+        "Well-groomed man in a neat suit, carefully composed smile that doesn't quite"
+        " reach his eyes, holding a clipboard, confident posture."
     ),
-    "confucius": _p(
-        "Ancient Chinese philosopher Confucius, flowing robes, long beard, serene expression,"
-        " bamboo."
+    "marcus": _p(
+        "Older male historian, reading glasses pushed up on forehead, surrounded by stacked"
+        " books and open maps, thoughtful and serious expression."
     ),
-    "pirate": _p("Pirate captain with red beard, tricorn hat, telescope, stormy seas behind."),
-    "explorer": _p(
-        "Victorian gentleman explorer, pith helmet, monocle, safari jacket, map in hand."
+    "diplomat": _p(
+        "Silver-haired diplomat in formal attire, measured expression, hands clasped,"
+        " flags subtly visible in background, air of quiet authority."
     ),
-    "conspiracy": _p(
-        "Mysterious figure in dark hoodie surrounded by red string connecting newspaper"
-        " clippings and photos."
-    ),
-    "commentator": _p(
-        "Energetic sports commentator in stadium, headset microphone, pointing dramatically"
-        " at camera."
-    ),
-    "existentialist": _p(
-        "Brooding French philosopher in turtleneck, cigarette, Parisian café, existential stare."
-    ),
-    "child": _p(
-        "Curious 5-year-old with big wondering eyes, raised hand as if asking a question, playful."
-    ),
-    "alien": _p(
-        "Friendly alien anthropologist with large eyes, taking notes on a clipboard,"
-        " observing humans."
+    "archivist": _p(
+        "Figure surrounded by towering shelves of documents and folders, wearing gloves,"
+        " carefully examining a yellowed page, focused and patient."
     ),
 }
 

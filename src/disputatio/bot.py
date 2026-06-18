@@ -32,7 +32,6 @@ from agent.logging_setup import setup_logging
 from agent.services.llm import build_model
 from disputatio import jobs, research, store
 from disputatio.models import Topic
-from disputatio.personas import all_keys
 
 # ---------------------------------------------------------------------------
 # ConversationHandler states (shared by /add_topic and /schedule)
@@ -67,7 +66,7 @@ async def _generate_name(description: str) -> str:
     return result.output.strip()
 
 
-_VALID_SIGNALS = {"good", "too_shallow", "too_long", "already_knew", "wrong_persona"}
+_VALID_SIGNALS = {"good", "too_shallow", "too_long", "already_knew"}
 
 # ---------------------------------------------------------------------------
 # Schedule constants
@@ -1489,42 +1488,10 @@ async def cmd_del_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 # ---------------------------------------------------------------------------
-# /persona
-# ---------------------------------------------------------------------------
-
-
-async def cmd_persona(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message is None or not await _allowed(update):
-        return
-    tg = update.effective_user
-    if tg is None or not context.args or len(context.args) < 2:
-        keys = ", ".join(all_keys())
-        if update.message:
-            await update.message.reply_text(
-                f"Usage: /persona <topic name> <persona key>\n\nAvailable: {keys}"
-            )
-        return
-    *name_parts, key = context.args
-    name = " ".join(name_parts)
-    if key not in all_keys():
-        await update.message.reply_text(
-            f"Unknown persona *{key}*. Available: {', '.join(all_keys())}",
-            parse_mode="Markdown",
-        )
-        return
-    topic = await store.get_topic_by_name(tg.id, name)
-    if topic is None:
-        await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
-        return
-    await store.update_topic(topic.id, pinned_persona=key)
-    await update.message.reply_text(f"Pinned *{key}* to *{topic.name}*.", parse_mode="Markdown")
-
-
-# ---------------------------------------------------------------------------
 # Feedback callback (digest reaction buttons)
 # ---------------------------------------------------------------------------
 
-_NEGATIVE_SIGNALS = {"too_shallow", "too_long", "already_knew", "wrong_persona"}
+_NEGATIVE_SIGNALS = {"too_shallow", "too_long", "already_knew"}
 
 
 async def on_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1761,7 +1728,6 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CommandHandler("resume", cmd_resume))
     app.add_handler(CommandHandler("add_source", cmd_add_source))
     app.add_handler(CommandHandler("del_source", cmd_del_source))
-    app.add_handler(CommandHandler("persona", cmd_persona))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("rename", cmd_rename))
     app.add_handler(CommandHandler("describe", cmd_describe))

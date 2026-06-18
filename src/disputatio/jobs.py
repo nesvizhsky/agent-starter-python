@@ -21,7 +21,6 @@ from telegram.error import BadRequest
 
 from disputatio import dedup, digest, perspectives, propaganda, research, store, synthesis
 from disputatio.models import Topic
-from disputatio.personas import Persona, avatar_url, pick
 from disputatio.synthesis import SynthesisOutput
 
 # ---------------------------------------------------------------------------
@@ -189,11 +188,9 @@ def _topic_keyboard(topic: Topic) -> InlineKeyboardMarkup:
 async def _send_digest(
     bot: Bot,
     topic: Topic,
-    persona: Persona,
     output: digest.DigestOutput,
     digest_id: UUID,
 ) -> None:
-    # 1. Topic name + stories — no persona yet.
     byline = f"<b>{topic.name}</b>\n\n"
     chunks = _chunk_text(output.main)
     for i, chunk in enumerate(chunks):
@@ -204,31 +201,7 @@ async def _send_digest(
             logger.warning("HTML parse failed for chunk {}/{} — retrying plain", i + 1, len(chunks))
             await bot.send_message(chat_id=topic.telegram_id, text=text)
 
-    # 2. Persona photo + character comment — after all stories.
-    photo_sent = False
-    try:
-        url = avatar_url(persona)
-        caption = f"*{persona.name}* — {persona.intro}"
-        if output.character_note:
-            caption += f"\n\n_{output.character_note}_"
-        await bot.send_photo(
-            chat_id=topic.telegram_id,
-            photo=url,
-            caption=caption,
-            parse_mode="Markdown",
-        )
-        photo_sent = True
-    except Exception:  # noqa: BLE001
-        logger.debug("avatar photo failed for {} — sending text only", persona.key)
-
-    if not photo_sent and output.character_note:
-        note = f"💬 <b>{persona.name}:</b>\n<i>{output.character_note}</i>"
-        try:
-            await bot.send_message(chat_id=topic.telegram_id, text=note, parse_mode="HTML")
-        except BadRequest:
-            await bot.send_message(chat_id=topic.telegram_id, text=output.character_note)
-
-    # 3. Topic card with action buttons.
+    # Topic card with action buttons.
     query_text = topic.description or topic.name
     last = topic.last_sent_at.strftime("%d %b") if topic.last_sent_at else "now"
     card_text = f"📌 *{topic.name}*\n_{query_text}  ·  {last}_"
@@ -262,20 +235,19 @@ async def _run_digest(topic: Topic, bot: Bot) -> None:
     lookback = research._LOOKBACK.get(topic.frequency, "48 hours")
     stories = await perspectives.cluster(fresh, topic_name=topic.name, lookback=lookback)
     stories = await propaganda.analyze(stories)
-    persona = pick(topic.pinned_persona)
-    output = await digest.generate(stories, persona, topic.feedback_notes)
+    output = await digest.generate(stories, topic.feedback_notes)
 
-    digest_id = await store.record_digest(topic.id, topic.telegram_id, output.main, persona.key)
+    digest_id = await store.record_digest(topic.id, topic.telegram_id, output.main, "none")
     await store.record_seen(topic.id, fresh, embeddings)
     await store.stamp_sent(topic.id)
 
-    await _send_digest(bot, topic, persona, output, digest_id)
+    await _send_digest(bot, topic, output, digest_id)
 
     if output.overflow:
         _overflow[topic.telegram_id] = output.overflow
     _last_digest[topic.telegram_id] = (topic.id, digest_id)
 
-    logger.info("digest sent: topic={} persona={}", topic.id, persona.key)
+    logger.info("digest sent: topic={}", topic.id)
 
 
 async def _run_synthesis(topic: Topic, bot: Bot) -> None:
