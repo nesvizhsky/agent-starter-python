@@ -882,7 +882,11 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         _, card_keyboard = _topic_card(topic)
         query_text = topic.description or topic.name
         last = topic.last_sent_at.strftime("%d %b") if topic.last_sent_at else "never sent"
-        running_text = f"📌 *{topic.name}*\n_{query_text}  ·  ⏳ fetching digest…  ·  {last}_"
+        running_text = (
+            f"📌 *{topic.name}*\n"
+            f"⏳ *Fetching digest…*\n"
+            f"_{query_text}  ·  {last}_"
+        )
         await query.edit_message_text(
             running_text, reply_markup=card_keyboard, parse_mode="Markdown"
         )
