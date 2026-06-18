@@ -60,6 +60,17 @@ class SourceView(BaseModel):
     url: str
     summary: str
     signals: list[str] = Field(default_factory=list)
+    # Research prose attached after clustering; excluded from LLM-facing outputs.
+    context: str | None = Field(default=None, exclude=True)
+
+
+class Contradiction(BaseModel):
+    """A direct factual conflict between two sources on the same story."""
+
+    source_a: str
+    claim_a: str
+    source_b: str
+    claim_b: str
 
 
 class Story(BaseModel):
@@ -89,6 +100,7 @@ class Story(BaseModel):
         ),
     )
     source_views: list[SourceView]
+    contradictions: list[Contradiction] = Field(default_factory=list)
 
 
 class Digest(BaseModel):

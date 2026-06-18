@@ -83,10 +83,16 @@ def _system_prompt(ctx: RunContext[_Deps]) -> str:
         '• <a href="URL"><i>Source A</i></a> — [what they specifically said/claimed]\n'
         '• <a href="URL"><i>Source B</i></a> — [their framing] 🚩 <i>state framing</i>\n'
         '• <a href="URL"><i>Source C</i></a> — [key omission noted] ⚠️ <i>omission</i>\n'
+        "⚡ Source A: \"exact claim\"  ← include only if contradictions are listed for this story\n"
+        "   Source B: \"conflicting claim\"\n"
         "[blank line between stories]\n\n"
         "Signals — add inline, sparingly, only when clearly present:\n"
         "  🚩 <i>state framing</i>  — propaganda/official language\n"
         "  ⚠️ <i>omission</i>  — a key fact left out\n\n"
+        "Contradictions — include after the source bullets, only if listed for that story:\n"
+        "  ⚡ Source A: \"exact claim\"\n"
+        "     Source B: \"conflicting claim\"\n"
+        "  Use the exact claims as given. Do not rephrase.\n\n"
         "For character_note: 2-3 sentences purely in your persona's voice — "
         "your take on what today's pattern reveals. This is your character moment.\n\n"
         "RULES:\n"
@@ -151,4 +157,9 @@ def _format_prompt(stories: list[Story]) -> str:
             lines.append(f"Says: {view.summary}")
             if view.signals:
                 lines.append(f"Rhetoric signals: {'; '.join(view.signals)}")
+        if story.contradictions:
+            lines.append("\nContradictions (include these verbatim after the bullets):")
+            for c in story.contradictions:
+                lines.append(f'  {c.source_a}: "{c.claim_a}"')
+                lines.append(f'  {c.source_b}: "{c.claim_b}"')
     return "\n".join(lines)

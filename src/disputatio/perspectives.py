@@ -3,18 +3,23 @@
 A "story" is one real-world event seen from multiple source perspectives.
 Grouping is done by an LLM (balanced tier). The agent also sets importance
 (1–3) and extracts an approximate event date from research context.
+
+After clustering, a second pass detects direct factual contradictions between
+sources on the same story (different numbers, timelines, who did what).
 """
 
 from __future__ import annotations
+
+import asyncio
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from agent.services.llm import build_model
-from disputatio.models import Article, Story
+from disputatio.models import Article, Contradiction, Story
 
 # ---------------------------------------------------------------------------
-# Agent definition
+# Clustering agent
 # ---------------------------------------------------------------------------
 
 
@@ -52,6 +57,50 @@ _agent: Agent[None, _Output] = Agent(
 )
 
 # ---------------------------------------------------------------------------
+# Contradiction detection agent
+# ---------------------------------------------------------------------------
+
+
+class _ContradictionOutput(BaseModel):
+    contradictions: list[Contradiction]
+
+
+_contradiction_agent: Agent[None, _ContradictionOutput] = Agent(
+    build_model("balanced"),
+    output_type=_ContradictionOutput,
+    system_prompt=(
+        "Find direct factual contradictions between news sources covering the same event.\n\n"
+        "A contradiction is when two sources make opposing or incompatible claims about the "
+        "SAME specific fact: a number (casualties, votes, distances), a date or timeline, "
+        "who did what, or whether a specific thing happened.\n\n"
+        "NOT a contradiction:\n"
+        "- Different tone or framing of the same facts\n"
+        "- One source mentioning something the other omits\n"
+        "- Minor number differences within normal reporting uncertainty (e.g. 'about 100' vs '97')\n"  # noqa: E501
+        "- Different interpretations or opinions\n\n"
+        "Return only clear, hard conflicts where both sources make explicit, incompatible "
+        "factual claims. If none, return an empty list.\n\n"
+        "claim_a and claim_b: the shortest exact phrase that shows the conflict. "
+        "Prefer direct quotes or specific figures over paraphrases."
+    ),
+)
+
+
+async def _detect_contradictions(story: Story) -> list[Contradiction]:
+    """Find factual contradictions between source_views for one story."""
+    if len(story.source_views) < 2:
+        return []
+    lines = [f"Story: {story.headline}\n"]
+    for view in story.source_views:
+        lines.append(f"{view.source}: {view.summary}")
+    try:
+        result = await _contradiction_agent.run("\n".join(lines))
+        return result.output.contradictions
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -63,18 +112,63 @@ async def cluster(
 
     Returns an empty list for empty input without making an LLM call.
     Does NOT guarantee every article appears — off-topic or stale articles are dropped.
+    Contradiction detection runs concurrently across all stories.
     """
     if not articles:
         return []
 
     prompt = _format_prompt(articles, topic_name)
     result = await _agent.run(prompt)
-    return result.output.stories
+    stories = result.output.stories
+
+    # Attach research context to each source_view so propaganda.py has
+    # richer material than the one-sentence summary alone.
+    _attach_contexts(stories, articles)
+
+    # Detect contradictions for all stories concurrently.
+    contradiction_lists = await asyncio.gather(
+        *[_detect_contradictions(s) for s in stories]
+    )
+    for story, contradictions in zip(stories, contradiction_lists, strict=True):
+        story.contradictions = contradictions
+
+    return stories
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _attach_contexts(stories: list[Story], articles: list[Article]) -> None:
+    """Best-effort: attach research context prose to each source_view.
+
+    Matches on source name (case-insensitive, domain-aware). Falls back to
+    the general query context if no source-specific match is found.
+    """
+    # Build lookup: normalised source name -> context text
+    ctx_by_source: dict[str, str] = {}
+    general_ctx: str | None = None
+    for a in articles:
+        if not a.context:
+            continue
+        if a.source == "general":
+            general_ctx = a.context
+        else:
+            key = a.source.lower().removeprefix("www.")
+            ctx_by_source[key] = a.context
+
+    for story in stories:
+        for view in story.source_views:
+            # Try exact match, then domain suffix match (e.g. "Reuters" in "reuters.com")
+            key = view.source.lower().removeprefix("www.")
+            ctx = ctx_by_source.get(key)
+            if ctx is None:
+                for src_key, src_ctx in ctx_by_source.items():
+                    if key in src_key or src_key in key:
+                        ctx = src_ctx
+                        break
+            view.context = ctx or general_ctx
 
 
 def _format_prompt(articles: list[Article], topic_name: str) -> str:

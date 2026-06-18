@@ -113,7 +113,9 @@ def _format_prompt(story: Story) -> str:
     ]
     for i, view in enumerate(story.source_views, 1):
         lines.append(f"{i}. Source: {view.source}")
-        lines.append(f"   Text: {view.summary}")
+        lines.append(f"   Summary: {view.summary}")
+        if view.context:
+            lines.append(f"   Research context: {view.context[:700]}")
     return "\n".join(lines)
 
 
