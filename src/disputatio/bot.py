@@ -879,11 +879,12 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if action == "check":
-        card_text, card_keyboard = _topic_card(topic)
+        _, card_keyboard = _topic_card(topic)
+        query_text = topic.description or topic.name
+        last = topic.last_sent_at.strftime("%d %b") if topic.last_sent_at else "never sent"
+        running_text = f"📌 *{topic.name}*\n_{query_text}  ·  ⏳ fetching digest…  ·  {last}_"
         await query.edit_message_text(
-            "⏳ _Running digest…_\n\n" + card_text,
-            reply_markup=card_keyboard,
-            parse_mode="Markdown",
+            running_text, reply_markup=card_keyboard, parse_mode="Markdown"
         )
         try:
             await jobs._run_digest(topic, context.bot)
