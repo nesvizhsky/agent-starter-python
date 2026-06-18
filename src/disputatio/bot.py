@@ -877,9 +877,6 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if action == "check":
-        await query.edit_message_text(
-            f"Running digest for *{_short(topic.name)}*…", parse_mode="Markdown"
-        )
         try:
             await jobs._run_digest(topic, context.bot)
         except Exception:  # noqa: BLE001
