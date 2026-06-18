@@ -879,6 +879,12 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if action == "check":
+        card_text, card_keyboard = _topic_card(topic)
+        await query.edit_message_text(
+            "⏳ _Running digest…_\n\n" + card_text,
+            reply_markup=card_keyboard,
+            parse_mode="Markdown",
+        )
         try:
             await jobs._run_digest(topic, context.bot)
         except Exception:  # noqa: BLE001
