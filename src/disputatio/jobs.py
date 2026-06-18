@@ -187,11 +187,12 @@ def _topic_keyboard(topic: Topic) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton("✏️ Rename", callback_data=f"tp:rename:{tid}"),
                 InlineKeyboardButton("🔍 Query", callback_data=f"tp:describe:{tid}"),
+                InlineKeyboardButton("📚 Sources", callback_data=f"tp:sources:{tid}"),
             ],
             [
-                InlineKeyboardButton("📅 Sched", callback_data=f"tp:schedule:{tid}"),
+                InlineKeyboardButton("📅", callback_data=f"tp:schedule:{tid}"),
                 InlineKeyboardButton("🔄 Reset", callback_data=f"tp:reset:{tid}"),
-                InlineKeyboardButton("🗑 Del", callback_data=f"tp:delete:{tid}"),
+                InlineKeyboardButton("🗑", callback_data=f"tp:delete:{tid}"),
             ],
         ]
     )

@@ -1003,6 +1003,55 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode="Markdown",
         )
 
+    elif action == "sources":
+        sources = topic.sources
+        if sources:
+            lines = "\n".join(s for s in sources)
+            msg = f"*Sources for {_short(topic.name)}:*\n_{lines}_\n\nTap to remove, or add:"  # noqa: E501
+        else:
+            msg = f"*Sources for {_short(topic.name)}:*\n_None — general research only._\n\nAdd a source domain:"  # noqa: E501
+        tid = str(topic.id)
+        rows = [
+            [InlineKeyboardButton(f"✖ {s}", callback_data=f"tp:rm_src:{tid}:{s}")]
+            for s in sources
+        ]
+        rows.append([InlineKeyboardButton("➕ Add source", callback_data=f"tp:add_src:{tid}")])
+        rows.append([InlineKeyboardButton("← Back", callback_data=f"tp:back:{tid}")])
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")  # noqa: E501
+
+    elif action == "rm_src":
+        source = (query.data or "").split(":", 3)[3]
+        updated_sources = [s for s in topic.sources if s != source]
+        await store.update_topic(topic.id, sources=updated_sources)
+        refreshed = await store.get_topic(query.from_user.id, topic.id)
+        if refreshed:
+            if refreshed.sources:
+                lines = "\n".join(s for s in refreshed.sources)
+                msg = f"*Sources for {_short(refreshed.name)}:*\n_{lines}_\n\nTap to remove, or add a new one:"  # noqa: E501
+            else:
+                msg = f"*Sources for {_short(refreshed.name)}:*\n_None — using general research only._\n\nAdd a source domain:"  # noqa: E501
+            rows = [
+                [InlineKeyboardButton(f"✖ {s}", callback_data=f"tp:rm_src:{refreshed.id}:{s}")]
+                for s in refreshed.sources
+            ]
+            rtid = str(refreshed.id)
+            rows.append([InlineKeyboardButton("➕ Add source", callback_data=f"tp:add_src:{rtid}")])
+            rows.append([InlineKeyboardButton("← Back", callback_data=f"tp:back:{rtid}")])
+            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")  # noqa: E501
+
+    elif action == "add_src":
+        if context.user_data is not None:
+            context.user_data["awaiting_source_id"] = str(topic.id)
+            context.user_data["awaiting_source_name"] = topic.name
+        await query.message.reply_text(  # type: ignore[union-attr]
+            f"Send the source domain for *{_short(topic.name)}* (e.g. `reuters.com`).\n_/cancel to abort._",  # noqa: E501
+            parse_mode="Markdown",
+        )
+
+    elif action == "back":
+        text, keyboard = _topic_card(topic)
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
     elif action == "delete":
         await query.edit_message_text(
             f"Delete *{_short(topic.name)}*?\n\nThis removes the topic and all its history.",
@@ -1058,11 +1107,12 @@ def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
             [
                 InlineKeyboardButton("✏️ Rename", callback_data=f"tp:rename:{tid}"),
                 InlineKeyboardButton("🔍 Query", callback_data=f"tp:describe:{tid}"),
+                InlineKeyboardButton("📚 Sources", callback_data=f"tp:sources:{tid}"),
             ],
             [
-                InlineKeyboardButton("📅 Sched", callback_data=f"tp:schedule:{tid}"),
+                InlineKeyboardButton("📅", callback_data=f"tp:schedule:{tid}"),
                 InlineKeyboardButton("🔄 Reset", callback_data=f"tp:reset:{tid}"),
-                InlineKeyboardButton("🗑 Del", callback_data=f"tp:delete:{tid}"),
+                InlineKeyboardButton("🗑", callback_data=f"tp:delete:{tid}"),
             ],
         ]
     )
@@ -1479,6 +1529,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "awaiting_rename_name",
             "awaiting_describe_id",
             "awaiting_describe_name",
+            "awaiting_source_id",
+            "awaiting_source_name",
             "new_topic_source_guidance",
         ):
             ud.pop(key, None)
@@ -1518,6 +1570,24 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"✓ *{topic_name}* will now research:\n_{expanded}_\n\n"
             "Use /reset then /check to fetch fresh results.",
             parse_mode="Markdown",
+        )
+        return
+
+    # Inline add source (triggered by ➕ Add source button in sources view)
+    if ud is not None and ud.get("awaiting_source_id"):
+        from uuid import UUID
+
+        topic_id = UUID(ud.pop("awaiting_source_id"))
+        topic_name = ud.pop("awaiting_source_name", "")
+        domain = text.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
+        topic = await store.get_topic(update.effective_user.id, topic_id)  # type: ignore[union-attr]
+        if topic is None:
+            await update.message.reply_text("Topic not found.")
+            return
+        if domain not in topic.sources:
+            await store.update_topic(topic_id, sources=[*topic.sources, domain])
+        await update.message.reply_text(
+            f"✓ Added *{domain}* to *{topic_name}*.", parse_mode="Markdown"
         )
         return
 
