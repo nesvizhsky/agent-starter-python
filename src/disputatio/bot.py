@@ -862,12 +862,14 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     if query is None or query.from_user is None or query.data is None:
         return
-    await query.answer()
 
     parts = query.data.split(":", 2)
     if len(parts) != 3:
+        await query.answer()
         return
     _, action, topic_id_str = parts
+
+    await query.answer("Running digest…" if action == "check" else "")
 
     from uuid import UUID
 
