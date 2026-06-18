@@ -174,6 +174,29 @@ def _chunk_text(text: str, limit: int = _TG_MAX) -> list[str]:
     return chunks
 
 
+def _topic_keyboard(topic: Topic) -> InlineKeyboardMarkup:
+    tid = str(topic.id)
+    pause_lbl = "▶ Resume" if topic.paused else "⏸ Pause"
+    pause_act = "resume" if topic.paused else "pause"
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("▶ Check now", callback_data=f"tp:check:{tid}"),
+                InlineKeyboardButton(pause_lbl, callback_data=f"tp:{pause_act}:{tid}"),
+            ],
+            [
+                InlineKeyboardButton("✏️ Rename", callback_data=f"tp:rename:{tid}"),
+                InlineKeyboardButton("🔍 Query", callback_data=f"tp:describe:{tid}"),
+            ],
+            [
+                InlineKeyboardButton("📅 Sched", callback_data=f"tp:schedule:{tid}"),
+                InlineKeyboardButton("🔄 Reset", callback_data=f"tp:reset:{tid}"),
+                InlineKeyboardButton("🗑 Del", callback_data=f"tp:delete:{tid}"),
+            ],
+        ]
+    )
+
+
 async def _send_digest(
     bot: Bot,
     topic: Topic,
@@ -195,31 +218,30 @@ async def _send_digest(
     byline = f"<b>{topic.name}</b>\n<b>{persona.name}</b> · <i>{persona.label}</i>\n\n"
     chunks = _chunk_text(output.main)
     for i, chunk in enumerate(chunks):
-        is_last = i == len(chunks) - 1
         text = (byline + chunk) if i == 0 else chunk
-        has_feedback = is_last and not output.character_note
-        kwargs = {
-            "chat_id": topic.telegram_id,
-            "text": text,
-            "reply_markup": _feedback_keyboard(digest_id) if has_feedback else None,
-        }
         try:
-            await bot.send_message(**kwargs, parse_mode="HTML")
+            await bot.send_message(chat_id=topic.telegram_id, text=text, parse_mode="HTML")
         except BadRequest:
             logger.warning("HTML parse failed for chunk {}/{} — retrying plain", i + 1, len(chunks))
-            await bot.send_message(**kwargs)
+            await bot.send_message(chat_id=topic.telegram_id, text=text)
 
     if output.character_note:
         note = f"<i>{output.character_note}</i>"
-        kwargs_note = {
-            "chat_id": topic.telegram_id,
-            "text": note,
-            "reply_markup": _feedback_keyboard(digest_id),
-        }
         try:
-            await bot.send_message(**kwargs_note, parse_mode="HTML")
+            await bot.send_message(chat_id=topic.telegram_id, text=note, parse_mode="HTML")
         except BadRequest:
-            await bot.send_message(**kwargs_note)
+            await bot.send_message(chat_id=topic.telegram_id, text=note)
+
+    # Show topic action buttons after the digest content.
+    query_text = topic.description or topic.name
+    last = topic.last_sent_at.strftime("%d %b") if topic.last_sent_at else "now"
+    card_text = f"📌 *{topic.name}*\n_{query_text}  ·  {last}_"
+    await bot.send_message(
+        chat_id=topic.telegram_id,
+        text=card_text,
+        reply_markup=_topic_keyboard(topic),
+        parse_mode="Markdown",
+    )
 
 
 # ---------------------------------------------------------------------------
