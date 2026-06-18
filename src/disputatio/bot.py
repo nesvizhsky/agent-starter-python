@@ -86,6 +86,71 @@ _SCHED_TYPE_LABELS: dict[str, str] = {
     "biweekly": "Every 2 weeks",
 }
 
+# Localised schedule strings keyed by language → freq → label
+_SCHED_L10N: dict[str, dict[str, str]] = {
+    "Russian": {
+        "daily": "Каждый день",
+        "twice_daily": "Дважды в день",
+        "weekdays": "Пн–Пт",
+        "mwf": "Пн/Ср/Пт",
+        "tuth": "Вт/Чт",
+        "custom_days": "Выбранные дни",
+        "weekly": "Раз в неделю",
+        "biweekly": "Раз в две недели",
+    },
+    "Spanish": {
+        "daily": "Cada día",
+        "twice_daily": "Dos veces al día",
+        "weekdays": "Lun–Vie",
+        "mwf": "Lun/Mié/Vie",
+        "tuth": "Mar/Jue",
+        "custom_days": "Días elegidos",
+        "weekly": "Una vez a la semana",
+        "biweekly": "Cada dos semanas",
+    },
+    "French": {
+        "daily": "Chaque jour",
+        "twice_daily": "Deux fois par jour",
+        "weekdays": "Lun–Ven",
+        "mwf": "Lun/Mer/Ven",
+        "tuth": "Mar/Jeu",
+        "custom_days": "Jours choisis",
+        "weekly": "Une fois par semaine",
+        "biweekly": "Toutes les deux semaines",
+    },
+    "German": {
+        "daily": "Täglich",
+        "twice_daily": "Zweimal täglich",
+        "weekdays": "Mo–Fr",
+        "mwf": "Mo/Mi/Fr",
+        "tuth": "Di/Do",
+        "custom_days": "Gewählte Tage",
+        "weekly": "Einmal pro Woche",
+        "biweekly": "Alle zwei Wochen",
+    },
+}
+
+_DOW_LABELS_L10N: dict[str, list[str]] = {
+    "Russian": ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"],
+    "Spanish": ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"],
+    "French": ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"],
+    "German": ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"],
+}
+
+_DOW_SHORT_L10N: dict[str, list[str]] = {
+    "Russian": ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"],
+    "Spanish": ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"],
+    "French": ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"],
+    "German": ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"],
+}
+
+_TOPICS_HEADER_L10N: dict[str, str] = {
+    "Russian": "Ваши {} тем:",
+    "Spanish": "Tus {} tema(s):",
+    "French": "Vos {} sujet(s) :",
+    "German": "Ihre {} Themen:",
+}
+
 # Frequency types that require a day-selection step
 _NEEDS_DAYS = frozenset({"custom_days", "weekly", "biweekly"})
 
@@ -704,7 +769,7 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _sched_label(topic: Topic) -> str:
+def _sched_label(topic: Topic, lang: str = "English") -> str:
     """Short human-readable schedule for /topics list: 'Mon/Wed/Fri · 09:00'."""
     return _sched_label_data(
         topic.frequency,
@@ -713,17 +778,22 @@ def _sched_label(topic: Topic) -> str:
         topic.send_dow,
         topic.schedule_days,
         topic.timezone,
+        lang,
     )
 
 
 def _sched_label_data(
-    freq: str, hour: int, minute: int, dow: int, schedule_days: str, timezone: str
+    freq: str, hour: int, minute: int, dow: int, schedule_days: str, timezone: str,
+    lang: str = "English",
 ) -> str:
-    freq_name = _SCHED_TYPE_LABELS.get(freq, freq)
+    type_labels = _SCHED_L10N.get(lang, _SCHED_TYPE_LABELS)
+    dow_labels = _DOW_LABELS_L10N.get(lang, _DOW_LABELS)
+    dow_short = _DOW_SHORT_L10N.get(lang, _DOW_SHORT)
+    freq_name = type_labels.get(freq, _SCHED_TYPE_LABELS.get(freq, freq))
     if freq in {"weekly", "biweekly"}:
-        freq_name = f"{freq_name} ({_DOW_LABELS[dow]})"
+        freq_name = f"{freq_name} ({dow_labels[dow]})"
     elif freq == "custom_days" and schedule_days:
-        freq_name = " / ".join(_DOW_SHORT[int(d)] for d in schedule_days.split(",") if d.strip())
+        freq_name = " / ".join(dow_short[int(d)] for d in schedule_days.split(",") if d.strip())
     tz_short = next((lbl.split()[0] for lbl, z in _TIMEZONES if z == timezone), "")
     time_str = f"{hour:02d}:{minute:02d}"
     if tz_short:
@@ -960,9 +1030,11 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.edit_message_text("Topic not found.")
         return
 
+    lang = await store.get_user_language(query.from_user.id)
+
     if action == "check":
         # Show running state inside the card (under the title, buttons stay)
-        _, card_keyboard = _topic_card(topic)
+        _, card_keyboard = _topic_card(topic, lang)
         query_text = topic.shown_description or topic.shown_name
         last = topic.last_sent_at.strftime("%d %b") if topic.last_sent_at else "never sent"
         running_text = (
@@ -996,7 +1068,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
         updated = await store.get_topic(query.from_user.id, topic.id)
         if updated:
-            text, keyboard = _topic_card(updated)
+            text, keyboard = _topic_card(updated, lang)
             await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action in ("pause", "resume"):
@@ -1004,12 +1076,12 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await store.update_topic(topic.id, paused=paused)
         updated = await store.get_topic(query.from_user.id, topic.id)
         if updated:
-            text, keyboard = _topic_card(updated)
+            text, keyboard = _topic_card(updated, lang)
             await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action == "reset":
         n = await store.clear_seen(topic.id)
-        text, keyboard = _topic_card(topic)
+        text, keyboard = _topic_card(topic, lang)
         await query.edit_message_text(
             text + f"\n\n✓ Cleared {n} seen articles.",
             reply_markup=keyboard,
@@ -1087,15 +1159,15 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
     elif action == "edit":
-        text, keyboard = _topic_card_expanded(topic)
+        text, keyboard = _topic_card_expanded(topic, lang)
         await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action == "close":
-        text, keyboard = _topic_card(topic)
+        text, keyboard = _topic_card(topic, lang)
         await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action == "back":
-        text, keyboard = _topic_card_expanded(topic)
+        text, keyboard = _topic_card_expanded(topic, lang)
         await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action == "delete":
@@ -1129,14 +1201,14 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ---------------------------------------------------------------------------
 
 
-def _topic_card_text(t: Topic) -> str:
+def _topic_card_text(t: Topic, lang: str = "English") -> str:
     query_text = t.shown_description or t.shown_name
-    status = "⏸ paused" if t.paused else _sched_label(t)
+    status = "⏸ paused" if t.paused else _sched_label(t, lang)
     last = t.last_sent_at.strftime("%d %b") if t.last_sent_at else "never sent"
     return f"📌 *{t.shown_name}*\n_{query_text}  ·  {status}  ·  {last}_"
 
 
-def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
+def _topic_card(t: Topic, lang: str = "English") -> tuple[str, InlineKeyboardMarkup]:
     """Compact card — just the primary action and an Edit button."""
     tid = str(t.id)
     keyboard = InlineKeyboardMarkup(
@@ -1147,10 +1219,10 @@ def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
             ]
         ]
     )
-    return _topic_card_text(t), keyboard
+    return _topic_card_text(t, lang), keyboard
 
 
-def _topic_card_expanded(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
+def _topic_card_expanded(t: Topic, lang: str = "English") -> tuple[str, InlineKeyboardMarkup]:
     """Expanded card — all management buttons + a Close row."""
     tid = str(t.id)
     pause_lbl = "▶ Resume" if t.paused else "⏸ Pause"
@@ -1174,7 +1246,7 @@ def _topic_card_expanded(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
             [InlineKeyboardButton("✕ Close", callback_data=f"tp:close:{tid}")],
         ]
     )
-    return _topic_card_text(t), keyboard
+    return _topic_card_text(t, lang), keyboard
 
 
 async def cmd_topics(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1184,14 +1256,16 @@ async def cmd_topics(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if tg is None:
         return
     topics = await store.get_topics(tg.id)
+    lang = await store.get_user_language(tg.id)
     if not topics:
         await update.message.reply_text(
             "You have no topics yet. Use /add\\_topic to create one.", parse_mode="Markdown"
         )
         return
-    await update.message.reply_text(f"Your {len(topics)} topic(s):")
+    header_tpl = _TOPICS_HEADER_L10N.get(lang, "Your {} topic(s):")
+    await update.message.reply_text(header_tpl.format(len(topics)))
     for t in topics:
-        text, keyboard = _topic_card(t)
+        text, keyboard = _topic_card(t, lang)
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
 
