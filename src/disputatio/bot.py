@@ -142,12 +142,19 @@ async def _reply(update: Update, text: str, **kwargs: object) -> None:
 _WELCOME = (
     "Welcome to *Disputatio* — news from multiple perspectives.\n\n"
     "Track topics you care about. Get digests comparing how different outlets cover the same "
-    "story, with rhetoric and bias signals.\n\n"
-    "To get started: /add\\_topic\n\n"
-    "*Topics* — /add\\_topic · /topics · /rename · /delete\\_topic\n\n"
-    "*Digests* — /check · /more · /synthesis · /reset\n\n"
-    "*Settings* — /schedule · /timezone · /pause · /resume\n"
-    "/add\\_source · /del\\_source · /describe · /persona"
+    "story, with rhetoric and bias signals."
+)
+
+_START_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [
+            InlineKeyboardButton("➕ Add topic", callback_data="start:add_topic"),
+            InlineKeyboardButton("📋 My topics", callback_data="start:topics"),
+        ],
+        [
+            InlineKeyboardButton("▶ Check now", callback_data="start:check"),
+        ],
+    ]
 )
 
 
@@ -158,7 +165,46 @@ async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if tg is None:
         return
     await store.get_or_create_user(tg.id, tg.first_name, tg.username)
-    await update.message.reply_text(_WELCOME, parse_mode="Markdown")
+    await update.message.reply_text(_WELCOME, parse_mode="Markdown", reply_markup=_START_KEYBOARD)
+
+
+async def _start_add_topic_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Entry point for the add-topic conversation via the /start button."""
+    query = update.callback_query
+    if query is None or query.from_user is None:
+        return ConversationHandler.END
+    await query.answer()
+    if context.user_data is not None:
+        context.user_data["sched_mode"] = "create"
+    await query.message.reply_text(  # type: ignore[union-attr]
+        "What do you want to track?\n\nDescribe it in a sentence — I'll suggest a name."
+    )
+    return _AT_DESC
+
+
+async def on_start_nav(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles My topics and Check now buttons from the /start message."""
+    query = update.callback_query
+    if query is None or query.from_user is None or query.data is None:
+        return
+    await query.answer()
+    action = query.data.split(":", 1)[1]
+    tg_id = query.from_user.id
+
+    if action == "topics":
+        topics = await store.get_topics(tg_id)
+        if not topics:
+            await query.message.reply_text(  # type: ignore[union-attr]
+                "You have no topics yet.", reply_markup=_START_KEYBOARD
+            )
+        else:
+            await query.message.reply_text(f"Your {len(topics)} topic(s):")  # type: ignore[union-attr]
+            for t in topics:
+                text, keyboard = _topic_card(t)
+                await query.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")  # type: ignore[union-attr]
+
+    elif action == "check":
+        await _topic_picker(update, tg_id, "check", "Which topic?")
 
 
 # ---------------------------------------------------------------------------
@@ -1525,6 +1571,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
         entry_points=[
             CommandHandler("add_topic", cmd_add_topic),
             CommandHandler("schedule", cmd_schedule),
+            CallbackQueryHandler(_start_add_topic_cb, pattern=r"^start:add_topic$"),
         ],
         states={
             _AT_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, _got_desc)],
@@ -1567,6 +1614,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CommandHandler("rename", cmd_rename))
     app.add_handler(CommandHandler("describe", cmd_describe))
     app.add_handler(CommandHandler("delete_topic", cmd_delete_topic))
+    app.add_handler(CallbackQueryHandler(on_start_nav, pattern=r"^start:(topics|check)$"))
     app.add_handler(CallbackQueryHandler(on_topic_panel, pattern=r"^tp:"))
     app.add_handler(CallbackQueryHandler(on_topic_action, pattern=r"^ta:"))
     app.add_handler(CallbackQueryHandler(on_topic_delete_confirm, pattern=r"^td:"))
