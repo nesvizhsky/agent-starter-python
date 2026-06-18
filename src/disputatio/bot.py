@@ -1072,8 +1072,16 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode="Markdown",
         )
 
-    elif action == "back":
+    elif action == "edit":
+        text, keyboard = _topic_card_expanded(topic)
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+    elif action == "close":
         text, keyboard = _topic_card(topic)
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+    elif action == "back":
+        text, keyboard = _topic_card_expanded(topic)
         await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action == "delete":
@@ -1098,7 +1106,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.edit_message_text(f"✓ *{_short(name)}* deleted.", parse_mode="Markdown")
 
     elif action == "del_cancel":
-        text, keyboard = _topic_card(topic)
+        text, keyboard = _topic_card_expanded(topic)
         await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
 
@@ -1107,21 +1115,32 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ---------------------------------------------------------------------------
 
 
-def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
-    """Build the text + action keyboard for one topic card.
-
-    Description, schedule, and last-sent are combined on one long italic line so
-    the message bubble always fills screen width — keeping buttons uniformly wide.
-    """
+def _topic_card_text(t: Topic) -> str:
     query_text = t.description or t.name
     status = "⏸ paused" if t.paused else _sched_label(t)
     last = t.last_sent_at.strftime("%d %b") if t.last_sent_at else "never sent"
-    text = f"📌 *{t.name}*\n_{query_text}  ·  {status}  ·  {last}_"
+    return f"📌 *{t.name}*\n_{query_text}  ·  {status}  ·  {last}_"
 
+
+def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
+    """Compact card — just the primary action and an Edit button."""
+    tid = str(t.id)
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("▶ Check now", callback_data=f"tp:check:{tid}"),
+                InlineKeyboardButton("✏️ Edit", callback_data=f"tp:edit:{tid}"),
+            ]
+        ]
+    )
+    return _topic_card_text(t), keyboard
+
+
+def _topic_card_expanded(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
+    """Expanded card — all management buttons + a Close row."""
     tid = str(t.id)
     pause_lbl = "▶ Resume" if t.paused else "⏸ Pause"
     pause_act = "resume" if t.paused else "pause"
-
     keyboard = InlineKeyboardMarkup(
         [
             [
@@ -1138,9 +1157,10 @@ def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
                 InlineKeyboardButton("🔄 Reset", callback_data=f"tp:reset:{tid}"),
                 InlineKeyboardButton("🗑", callback_data=f"tp:delete:{tid}"),
             ],
+            [InlineKeyboardButton("✕ Close", callback_data=f"tp:close:{tid}")],
         ]
     )
-    return text, keyboard
+    return _topic_card_text(t), keyboard
 
 
 async def cmd_topics(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:

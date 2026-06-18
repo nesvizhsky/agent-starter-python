@@ -176,24 +176,12 @@ def _chunk_text(text: str, limit: int = _TG_MAX) -> list[str]:
 
 def _topic_keyboard(topic: Topic) -> InlineKeyboardMarkup:
     tid = str(topic.id)
-    pause_lbl = "▶ Resume" if topic.paused else "⏸ Pause"
-    pause_act = "resume" if topic.paused else "pause"
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton("▶ Check now", callback_data=f"tp:check:{tid}"),
-                InlineKeyboardButton(pause_lbl, callback_data=f"tp:{pause_act}:{tid}"),
-            ],
-            [
-                InlineKeyboardButton("✏️ Rename", callback_data=f"tp:rename:{tid}"),
-                InlineKeyboardButton("🔍 Query", callback_data=f"tp:describe:{tid}"),
-                InlineKeyboardButton("📚 Sources", callback_data=f"tp:sources:{tid}"),
-            ],
-            [
-                InlineKeyboardButton("📅", callback_data=f"tp:schedule:{tid}"),
-                InlineKeyboardButton("🔄 Reset", callback_data=f"tp:reset:{tid}"),
-                InlineKeyboardButton("🗑", callback_data=f"tp:delete:{tid}"),
-            ],
+                InlineKeyboardButton("✏️ Edit", callback_data=f"tp:edit:{tid}"),
+            ]
         ]
     )
 
