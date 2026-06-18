@@ -43,11 +43,10 @@ _CHECKLIST = """\
 - Loaded vocabulary: emotionally charged words that frame the event
   (e.g. 'terrorist attack' vs 'military operation', 'settlers' vs 'colonists')
 - One-sided framing: selecting which facts to include so only one interpretation looks valid
-- Dehumanising language: referring to a group as vermin, a threat, an abstraction
+- Dehumanising language: referring to a group as vermin, a threat, or an abstraction
 - False equivalence: treating clearly unequal things as equivalent to appear balanced
 - Appeal to obviousness: 'everyone knows', 'it is clear that', 'obviously'
-- Passive construction hiding agency: 'buildings were destroyed' — destroyed by whom?
-- Conspicuous omission: a fact mentioned by other sources that this source avoids entirely"""
+- Passive construction hiding agency: 'buildings were destroyed' — destroyed by whom?"""
 
 _agent: Agent[None, _Output] = Agent(
     build_model("balanced"),
