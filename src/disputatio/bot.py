@@ -906,25 +906,27 @@ async def _show_sources_view(query: object, topic: Topic) -> None:
     q: CQ = query  # type: ignore[assignment]
     tid = str(topic.id)
     tracked = topic.sources
+    ignored = topic.excluded_sources
 
     lines: list[str] = []
-    if tracked:
-        lines.append("*Always queried:*")
-        lines += [f"  · {s}" for s in tracked]
-    else:
-        lines.append("*Always queried:* _none_")
+    lines.append("*Always check:* " + (", ".join(tracked) if tracked else "_none_"))
+    lines.append("*Always ignore:* " + (", ".join(ignored) if ignored else "_none_"))
     lines.append("")
     lines.append(
-        "_Each research run also does a general web search — "
-        "those sources vary each time. Add a source here to always query it by name._"
+        "_Tracked sources are queried by name every run. "
+        "Ignored sources are never used, even if found by the general search._"
     )
     msg = "\n".join(lines)
 
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(f"✖ remove  {s}", callback_data=f"tp:rm_src:{tid}:{s}")]
-        for s in tracked
-    ]
-    rows.append([InlineKeyboardButton("➕ Add source", callback_data=f"tp:add_src:{tid}")])
+    rows: list[list[InlineKeyboardButton]] = []
+    for s in tracked:
+        rows.append([InlineKeyboardButton(f"✖ {s}", callback_data=f"tp:rm_src:{tid}:{s}")])
+    for s in ignored:
+        rows.append([InlineKeyboardButton(f"🚫 {s}", callback_data=f"tp:rm_blk:{tid}:{s}")])
+    rows.append([
+        InlineKeyboardButton("➕ Always check", callback_data=f"tp:add_src:{tid}"),
+        InlineKeyboardButton("🚫 Always ignore", callback_data=f"tp:add_blk:{tid}"),
+    ])
     rows.append([InlineKeyboardButton("← Back", callback_data=f"tp:back:{tid}")])
     await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
@@ -1049,7 +1051,24 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context.user_data["awaiting_source_id"] = str(topic.id)
             context.user_data["awaiting_source_name"] = topic.name
         await query.message.reply_text(  # type: ignore[union-attr]
-            f"Send the source domain for *{_short(topic.name)}* (e.g. `reuters.com`).\n_/cancel to abort._",  # noqa: E501
+            f"Which domain should *{_short(topic.name)}* always check? (e.g. `reuters.com`)\n_/cancel to abort._",  # noqa: E501
+            parse_mode="Markdown",
+        )
+
+    elif action == "rm_blk":
+        source = (query.data or "").split(":", 3)[3]
+        updated = [s for s in topic.excluded_sources if s != source]
+        await store.update_topic(topic.id, excluded_sources=updated)
+        refreshed = await store.get_topic(query.from_user.id, topic.id)
+        if refreshed:
+            await _show_sources_view(query, refreshed)
+
+    elif action == "add_blk":
+        if context.user_data is not None:
+            context.user_data["awaiting_block_id"] = str(topic.id)
+            context.user_data["awaiting_block_name"] = topic.name
+        await query.message.reply_text(  # type: ignore[union-attr]
+            f"Which domain should *{_short(topic.name)}* always ignore? (e.g. `foxnews.com`)\n_/cancel to abort._",  # noqa: E501
             parse_mode="Markdown",
         )
 
@@ -1536,6 +1555,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "awaiting_describe_name",
             "awaiting_source_id",
             "awaiting_source_name",
+            "awaiting_block_id",
+            "awaiting_block_name",
             "new_topic_source_guidance",
         ):
             ud.pop(key, None)
@@ -1593,6 +1614,24 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await store.update_topic(topic_id, sources=[*topic.sources, domain])
         await update.message.reply_text(
             f"✓ Added *{domain}* to *{topic_name}*.", parse_mode="Markdown"
+        )
+        return
+
+    # Inline add ignored source (triggered by 🚫 Always ignore button)
+    if ud is not None and ud.get("awaiting_block_id"):
+        from uuid import UUID
+
+        topic_id = UUID(ud.pop("awaiting_block_id"))
+        topic_name = ud.pop("awaiting_block_name", "")
+        domain = text.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
+        topic = await store.get_topic(update.effective_user.id, topic_id)  # type: ignore[union-attr]
+        if topic is None:
+            await update.message.reply_text("Topic not found.")
+            return
+        if domain not in topic.excluded_sources:
+            await store.update_topic(topic_id, excluded_sources=[*topic.excluded_sources, domain])
+        await update.message.reply_text(
+            f"✓ *{domain}* will be ignored for *{topic_name}*.", parse_mode="Markdown"
         )
         return
 
