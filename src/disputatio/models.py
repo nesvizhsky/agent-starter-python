@@ -24,6 +24,8 @@ class Topic(BaseModel):
     telegram_id: int
     name: str
     description: str | None
+    display_name: str | None = None         # translated display label (UI only)
+    display_description: str | None = None  # translated description (UI only)
     frequency: str  # daily|twice_daily|weekdays|mwf|tuth|custom_days|weekly|biweekly
     send_hour: int
     send_minute: int  # minute of hour; scheduling checks hour only (cron fires hourly)
@@ -40,6 +42,14 @@ class Topic(BaseModel):
     created_at: datetime
     last_sent_at: datetime | None
     last_synthesis_at: datetime | None
+
+    @property
+    def shown_name(self) -> str:
+        return self.display_name or self.name
+
+    @property
+    def shown_description(self) -> str | None:
+        return self.display_description or self.description
 
 
 class Article(BaseModel):

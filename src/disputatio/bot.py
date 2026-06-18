@@ -751,7 +751,10 @@ async def _topic_picker(
                 parse_mode="Markdown",
             )
         return
-    buttons = [[InlineKeyboardButton(t.name, callback_data=f"ta:{action}:{t.id}")] for t in topics]
+    buttons = [
+        [InlineKeyboardButton(t.shown_name, callback_data=f"ta:{action}:{t.id}")]
+        for t in topics
+    ]
     if update.message:
         await update.message.reply_text(prompt, reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -960,10 +963,10 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if action == "check":
         # Show running state inside the card (under the title, buttons stay)
         _, card_keyboard = _topic_card(topic)
-        query_text = topic.description or topic.name
+        query_text = topic.shown_description or topic.shown_name
         last = topic.last_sent_at.strftime("%d %b") if topic.last_sent_at else "never sent"
         running_text = (
-            f"📌 *{topic.name}*\n"
+            f"📌 *{topic.shown_name}*\n"
             f"⏳ _Fetching digest…_\n"
             f"_{query_text}  ·  {last}_"
         )
@@ -974,7 +977,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         status = await context.bot.send_message(
             chat_id=topic.telegram_id,
             text=(
-                f"⏳ *Fetching digest for {topic.name}…*\n"
+                f"⏳ *Fetching digest for {topic.shown_name}…*\n"
                 "_This takes 1–2 minutes. Other commands won't respond until it's done._"
             ),
             parse_mode="Markdown",
@@ -1127,10 +1130,10 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 def _topic_card_text(t: Topic) -> str:
-    query_text = t.description or t.name
+    query_text = t.shown_description or t.shown_name
     status = "⏸ paused" if t.paused else _sched_label(t)
     last = t.last_sent_at.strftime("%d %b") if t.last_sent_at else "never sent"
-    return f"📌 *{t.name}*\n_{query_text}  ·  {status}  ·  {last}_"
+    return f"📌 *{t.shown_name}*\n_{query_text}  ·  {status}  ·  {last}_"
 
 
 def _topic_card(t: Topic) -> tuple[str, InlineKeyboardMarkup]:
@@ -1254,6 +1257,60 @@ async def cmd_language(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def _translate_topics(telegram_id: int, language: str) -> None:
+    """Translate display_name and display_description for all user topics.
+
+    If language is English, clears display fields so originals show through.
+    Runs best-effort — a failure here doesn't block the language save.
+    """
+    from pydantic import BaseModel as _BM
+    from pydantic_ai import Agent as _Agent
+
+    from agent.services.llm import build_model as _build
+
+    topics = await store.get_topics(telegram_id)
+    if not topics:
+        return
+
+    if language == "English":
+        for t in topics:
+            await store.set_topic_display_fields(t.id, None, None)
+        return
+
+    class _Row(_BM):
+        id: str
+        name: str
+        description: str | None
+
+    class _Out(_BM):
+        translations: list[_Row]
+
+    agent: _Agent[None, _Out] = _Agent(
+        _build("fast"),
+        output_type=_Out,
+        system_prompt=(
+            f"Translate the given topic names and descriptions into {language}. "
+            "Keep proper nouns, place names, and organisation names as they are "
+            "conventionally written in {language}. "
+            "Return every topic in the same order; include the original id unchanged."
+        ),
+    )
+    rows = [_Row(id=str(t.id), name=t.name, description=t.description) for t in topics]
+    prompt = f"Translate these {len(rows)} topic(s) into {language}:\n" + "\n".join(
+        f"- id={r.id}  name={r.name!r}  description={r.description!r}" for r in rows
+    )
+    result = await agent.run(prompt)
+    by_id = {r.id: r for r in result.output.translations}
+    for t in topics:
+        tr = by_id.get(str(t.id))
+        if tr:
+            await store.set_topic_display_fields(
+                t.id,
+                tr.name if tr.name != t.name else None,
+                tr.description if tr.description != t.description else None,
+            )
+
+
 async def _cb_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if query is None or query.data is None:
@@ -1273,6 +1330,7 @@ async def _cb_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await store.set_user_language(tg.id, lang)
     confirm = _LANGUAGE_CONFIRMED.get(lang, f"✓ Digests will now be written in {lang}.")
     await query.edit_message_text(confirm)
+    await _translate_topics(tg.id, lang)
 
 
 # ---------------------------------------------------------------------------
@@ -1640,6 +1698,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await store.set_user_language(tg.id, text)
             confirm = _LANGUAGE_CONFIRMED.get(text, f"✓ Digests will now be written in {text}.")
             await update.message.reply_text(confirm)
+            await _translate_topics(tg.id, text)
         return
 
     # Inline rename (triggered by ✏️ Rename button on topic card)

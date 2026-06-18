@@ -191,7 +191,7 @@ async def _send_digest(
     output: digest.DigestOutput,
     digest_id: UUID,
 ) -> None:
-    byline = f"<b>{topic.name}</b>\n\n"
+    byline = f"<b>{topic.shown_name}</b>\n\n"
     chunks = _chunk_text(output.main)
     for i, chunk in enumerate(chunks):
         text = (byline + chunk) if i == 0 else chunk
@@ -202,9 +202,9 @@ async def _send_digest(
             await bot.send_message(chat_id=topic.telegram_id, text=text)
 
     # Topic card with action buttons.
-    query_text = topic.description or topic.name
+    query_text = topic.shown_description or topic.shown_name
     last = topic.last_sent_at.strftime("%d %b") if topic.last_sent_at else "now"
-    card_text = f"📌 *{topic.name}*\n_{query_text}  ·  {last}_"
+    card_text = f"📌 *{topic.shown_name}*\n_{query_text}  ·  {last}_"
     await bot.send_message(
         chat_id=topic.telegram_id,
         text=card_text,

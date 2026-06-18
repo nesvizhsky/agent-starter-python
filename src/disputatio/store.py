@@ -23,6 +23,8 @@ _UPDATABLE_TOPIC_FIELDS = frozenset(
     {
         "name",
         "description",
+        "display_name",
+        "display_description",
         "frequency",
         "send_hour",
         "send_minute",
@@ -102,6 +104,21 @@ async def set_user_language(telegram_id: int, language: str) -> None:
         "UPDATE disputatio_users SET language = $1 WHERE telegram_id = $2",
         language,
         telegram_id,
+    )
+
+
+async def set_topic_display_fields(
+    topic_id: UUID,
+    display_name: str | None,
+    display_description: str | None,
+) -> None:
+    await db.execute(
+        """UPDATE disputatio_topics
+           SET display_name = $1, display_description = $2
+           WHERE id = $3""",
+        display_name,
+        display_description,
+        topic_id,
     )
 
 
