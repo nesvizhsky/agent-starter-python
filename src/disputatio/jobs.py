@@ -226,11 +226,11 @@ async def _send_digest(
             await bot.send_message(chat_id=topic.telegram_id, text=text)
 
     if output.character_note:
-        note = f"<i>{output.character_note}</i>"
+        note = f"💬 <b>{persona.name}:</b>\n<i>{output.character_note}</i>"
         try:
             await bot.send_message(chat_id=topic.telegram_id, text=note, parse_mode="HTML")
         except BadRequest:
-            await bot.send_message(chat_id=topic.telegram_id, text=note)
+            await bot.send_message(chat_id=topic.telegram_id, text=output.character_note)
 
     # Show topic action buttons after the digest content.
     query_text = topic.description or topic.name
