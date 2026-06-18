@@ -899,6 +899,36 @@ async def on_tz_set(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def _show_sources_view(query: object, topic: Topic) -> None:
+    """Edit the current message to show the sources management view for *topic*."""
+    from telegram import CallbackQuery as CQ
+
+    q: CQ = query  # type: ignore[assignment]
+    tid = str(topic.id)
+    tracked = topic.sources
+
+    lines: list[str] = []
+    if tracked:
+        lines.append("*Always queried:*")
+        lines += [f"  · {s}" for s in tracked]
+    else:
+        lines.append("*Always queried:* _none_")
+    lines.append("")
+    lines.append(
+        "_Each research run also does a general web search — "
+        "those sources vary each time. Add a source here to always query it by name._"
+    )
+    msg = "\n".join(lines)
+
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(f"✖ remove  {s}", callback_data=f"tp:rm_src:{tid}:{s}")]
+        for s in tracked
+    ]
+    rows.append([InlineKeyboardButton("➕ Add source", callback_data=f"tp:add_src:{tid}")])
+    rows.append([InlineKeyboardButton("← Back", callback_data=f"tp:back:{tid}")])
+    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+
+
 # ---------------------------------------------------------------------------
 # Topic panel callbacks (tp:{action}:{topic_id})
 # ---------------------------------------------------------------------------
@@ -1004,40 +1034,15 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
     elif action == "sources":
-        sources = topic.sources
-        if sources:
-            lines = "\n".join(s for s in sources)
-            msg = f"*Sources for {_short(topic.name)}:*\n_{lines}_\n\nTap to remove, or add:"  # noqa: E501
-        else:
-            msg = f"*Sources for {_short(topic.name)}:*\n_None — general research only._\n\nAdd a source domain:"  # noqa: E501
-        tid = str(topic.id)
-        rows = [
-            [InlineKeyboardButton(f"✖ {s}", callback_data=f"tp:rm_src:{tid}:{s}")]
-            for s in sources
-        ]
-        rows.append([InlineKeyboardButton("➕ Add source", callback_data=f"tp:add_src:{tid}")])
-        rows.append([InlineKeyboardButton("← Back", callback_data=f"tp:back:{tid}")])
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")  # noqa: E501
+        await _show_sources_view(query, topic)
 
     elif action == "rm_src":
         source = (query.data or "").split(":", 3)[3]
-        updated_sources = [s for s in topic.sources if s != source]
-        await store.update_topic(topic.id, sources=updated_sources)
+        updated = [s for s in topic.sources if s != source]
+        await store.update_topic(topic.id, sources=updated)
         refreshed = await store.get_topic(query.from_user.id, topic.id)
         if refreshed:
-            if refreshed.sources:
-                lines = "\n".join(s for s in refreshed.sources)
-                msg = f"*Sources for {_short(refreshed.name)}:*\n_{lines}_\n\nTap to remove, or add a new one:"  # noqa: E501
-            else:
-                msg = f"*Sources for {_short(refreshed.name)}:*\n_None — using general research only._\n\nAdd a source domain:"  # noqa: E501
-            rows = [
-                [InlineKeyboardButton(f"✖ {s}", callback_data=f"tp:rm_src:{refreshed.id}:{s}")]
-                for s in refreshed.sources
-            ]
-            rtid = str(refreshed.id)
-            rows.append([InlineKeyboardButton("➕ Add source", callback_data=f"tp:add_src:{rtid}")])
-            rows.append([InlineKeyboardButton("← Back", callback_data=f"tp:back:{rtid}")])
-            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")  # noqa: E501
+            await _show_sources_view(query, refreshed)
 
     elif action == "add_src":
         if context.user_data is not None:
