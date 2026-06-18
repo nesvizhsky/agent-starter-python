@@ -216,12 +216,16 @@ def _t(lang: str, key: str, **fmt: object) -> str:
 
 
 async def _lang(telegram_id: int) -> str:
-    """Return cached user language, fetching from DB on first access and warming the UI cache."""
+    """Return user language and ensure UI strings are translated for it.
+
+    Always calls _ensure_ui — it's a no-op once the cache is warm, but this
+    guarantees the cache is populated even after a mid-session language change.
+    """
     if telegram_id not in _lang_cache:
-        lang = await store.get_user_language(telegram_id)
-        _lang_cache[telegram_id] = lang
-        await _ensure_ui(lang)
-    return _lang_cache[telegram_id]
+        _lang_cache[telegram_id] = await store.get_user_language(telegram_id)
+    lang = _lang_cache[telegram_id]
+    await _ensure_ui(lang)
+    return lang
 
 
 # ---------------------------------------------------------------------------
