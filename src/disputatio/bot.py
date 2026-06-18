@@ -1235,6 +1235,41 @@ _LANGUAGE_CONFIRMED = {
     "Portuguese": "✓ Os resumos serão escritos em português.",
 }
 
+_LANGUAGE_PROMPT: dict[str, tuple[str, str]] = {
+    "English": (
+        "Current language: *{lang}*\n\nChoose the language for your digests:",
+        "✏️ Other — type it",
+    ),
+    "Russian": (
+        "Текущий язык: *{lang}*\n\nВыберите язык дайджестов:",
+        "✏️ Другой — напишите",
+    ),
+    "Spanish": (
+        "Idioma actual: *{lang}*\n\nElige el idioma de tus resúmenes:",
+        "✏️ Otro — escríbelo",
+    ),
+    "French": (
+        "Langue actuelle : *{lang}*\n\nChoisissez la langue de vos résumés :",
+        "✏️ Autre — tapez-le",
+    ),
+    "German": (
+        "Aktuelle Sprache: *{lang}*\n\nWähle die Sprache deiner Digests:",
+        "✏️ Andere — tippe sie",
+    ),
+    "Arabic": (
+        "اللغة الحالية: *{lang}*\n\nاختر لغة الملخصات:",
+        "✏️ أخرى — اكتبها",
+    ),
+    "Chinese": (
+        "当前语言：*{lang}*\n\n选择摘要语言：",
+        "✏️ 其他——请输入",
+    ),
+    "Portuguese": (
+        "Idioma atual: *{lang}*\n\nEscolha o idioma dos resumos:",
+        "✏️ Outro — escreva",
+    ),
+}
+
 
 async def cmd_language(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None or not await _allowed(update):
@@ -1243,15 +1278,18 @@ async def cmd_language(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if tg is None:
         return
     current = await store.get_user_language(tg.id)
+    prompt_tpl, other_label = _LANGUAGE_PROMPT.get(
+        current, _LANGUAGE_PROMPT["English"]
+    )
     buttons = [
         [InlineKeyboardButton(  # noqa: E501
             f"{'✓ ' if lang == current else ''}{label}", callback_data=f"lang:{lang}"
         )]
         for label, lang in _LANGUAGE_OPTIONS
     ]
-    buttons.append([InlineKeyboardButton("✏️ Other — type it", callback_data="lang:__other__")])
+    buttons.append([InlineKeyboardButton(other_label, callback_data="lang:__other__")])
     await update.message.reply_text(
-        f"Current language: *{current}*\n\nChoose the language for your digests:",
+        prompt_tpl.format(lang=current),
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="Markdown",
     )
@@ -1290,8 +1328,8 @@ async def _translate_topics(telegram_id: int, language: str) -> None:
         output_type=_Out,
         system_prompt=(
             f"Translate the given topic names and descriptions into {language}. "
-            "Keep proper nouns, place names, and organisation names as they are "
-            "conventionally written in {language}. "
+            f"Write place names and proper nouns as they are conventionally written in {language} "
+            f"(e.g. 'Russia-Ukraine' → 'Россия-Украина' in Russian). "
             "Return every topic in the same order; include the original id unchanged."
         ),
     )
@@ -1304,11 +1342,7 @@ async def _translate_topics(telegram_id: int, language: str) -> None:
     for t in topics:
         tr = by_id.get(str(t.id))
         if tr:
-            await store.set_topic_display_fields(
-                t.id,
-                tr.name if tr.name != t.name else None,
-                tr.description if tr.description != t.description else None,
-            )
+            await store.set_topic_display_fields(t.id, tr.name, tr.description)
 
 
 async def _cb_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1322,10 +1356,20 @@ async def _cb_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     lang = query.data[len("lang:"):]
     if lang == "__other__":
         context.user_data["awaiting_language"] = True  # type: ignore[index]
-        await query.edit_message_text(
-            "Type the language you want (e.g. *Italian*, *Japanese*, *Ukrainian*):",
-            parse_mode="Markdown",
+        current = await store.get_user_language(tg.id)
+        other_prompts = {
+            "Russian": "Напишите язык (например, *итальянский*, *японский*, *украинский*):",
+            "Spanish": "Escribe el idioma (ej. *italiano*, *japonés*, *ucraniano*):",
+            "French": "Tapez la langue (ex. *italien*, *japonais*, *ukrainien*) :",
+            "German": "Tippe die Sprache ein (z.B. *Italienisch*, *Japanisch*, *Ukrainisch*):",
+            "Arabic": "اكتب اللغة (مثلاً *الإيطالية*، *اليابانية*، *الأوكرانية*):",
+            "Chinese": "请输入语言（例如*意大利语*、*日语*、*乌克兰语*）：",
+            "Portuguese": "Escreva o idioma (ex. *italiano*, *japonês*, *ucraniano*):",
+        }
+        prompt = other_prompts.get(
+            current, "Type the language you want (e.g. *Italian*, *Japanese*, *Ukrainian*):"
         )
+        await query.edit_message_text(prompt, parse_mode="Markdown")
         return
     await store.set_user_language(tg.id, lang)
     confirm = _LANGUAGE_CONFIRMED.get(lang, f"✓ Digests will now be written in {lang}.")
