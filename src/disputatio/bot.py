@@ -10,6 +10,7 @@ In production the same handlers run via webhook — see app.py.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from loguru import logger
 from pydantic_ai import Agent
@@ -925,22 +926,23 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if action == "check":
-        _, card_keyboard = _topic_card(topic)
-        query_text = topic.description or topic.name
-        last = topic.last_sent_at.strftime("%d %b") if topic.last_sent_at else "never sent"
-        running_text = (
-            f"📌 *{topic.name}*\n"
-            f"⏳ *Fetching digest…*\n"
-            f"_{query_text}  ·  {last}_"
+        status = await context.bot.send_message(
+            chat_id=topic.telegram_id,
+            text=f"⏳ *Fetching digest for {topic.name}…*",
+            parse_mode="Markdown",
         )
-        await query.edit_message_text(
-            running_text, reply_markup=card_keyboard, parse_mode="Markdown"
-        )
+        failed = False
         try:
             await jobs._run_digest(topic, context.bot)
         except Exception:  # noqa: BLE001
             logger.exception("panel /check failed for topic {}", topic.id)
-            await query.message.reply_text("Something went wrong — try again.")  # type: ignore[union-attr]
+            failed = True
+        with contextlib.suppress(Exception):
+            await status.delete()
+        if failed:
+            await context.bot.send_message(
+                chat_id=topic.telegram_id, text="Something went wrong — try again."
+            )
         updated = await store.get_topic(query.from_user.id, topic.id)
         if updated:
             text, keyboard = _topic_card(updated)
