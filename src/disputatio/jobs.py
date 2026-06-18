@@ -192,7 +192,7 @@ async def _send_digest(
     except Exception:  # noqa: BLE001
         logger.debug("avatar photo failed for {} — sending text only", persona.key)
 
-    byline = f"<b>{persona.name}</b> · <i>{persona.label}</i>\n\n"
+    byline = f"<b>{topic.name}</b>\n<b>{persona.name}</b> · <i>{persona.label}</i>\n\n"
     chunks = _chunk_text(output.main)
     for i, chunk in enumerate(chunks):
         is_last = i == len(chunks) - 1

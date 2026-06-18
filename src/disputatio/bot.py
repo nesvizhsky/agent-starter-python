@@ -140,32 +140,14 @@ async def _reply(update: Update, text: str, **kwargs: object) -> None:
 # ---------------------------------------------------------------------------
 
 _WELCOME = (
-    "Welcome to *Disputatio* — your multi-perspective news intelligence bot.\n\n"
-    "I track topics you care about and deliver regular digests showing how different "
-    "sources frame the same events — including rhetoric and propaganda signals.\n\n"
-    "Sources are filtered to quality journalism, scientific publications, and institutional "
-    "sources. Company blogs, YouTube, and aggregator listicles are excluded automatically. "
-    "You can still add any source manually per topic — user-added sources are always included.\n\n"
+    "Welcome to *Disputatio* — news from multiple perspectives.\n\n"
+    "Track topics you care about. Get digests comparing how different outlets cover the same "
+    "story, with rhetoric and bias signals.\n\n"
     "To get started: /add\\_topic\n\n"
-    "*Topics*\n"
-    "/add\\_topic — track a new topic\n"
-    "/topics — list your topics\n"
-    "/delete\\_topic — delete a topic\n"
-    "/rename — rename a topic\n\n"
-    "*Digests*\n"
-    "/check — get a digest right now\n"
-    "/more — full analysis from the last digest\n"
-    "/reset — clear seen articles (fetch fresh)\n"
-    "/synthesis — weekly synthesis\n\n"
-    "*Settings*\n"
-    "/schedule — change when a topic sends\n"
-    "/timezone — update timezone for a topic\n"
-    "/describe — fix what the LLM actually searches for\n"
-    "/pause — pause a topic\n"
-    "/resume — resume a topic\n"
-    "/add\\_source — add a source to a topic\n"
-    "/del\\_source — remove a source from a topic\n"
-    "/persona — pin a persona to a topic"
+    "*Topics* — /add\\_topic · /topics · /rename · /delete\\_topic\n\n"
+    "*Digests* — /check · /more · /synthesis · /reset\n\n"
+    "*Settings* — /schedule · /timezone · /pause · /resume\n"
+    "/add\\_source · /del\\_source · /describe · /persona"
 )
 
 
@@ -756,6 +738,10 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception:  # noqa: BLE001
             logger.exception("picker /check failed for topic {}", topic.id)
             await query.message.reply_text("Something went wrong — try again in a moment.")  # type: ignore[union-attr]
+        updated = await store.get_topic(query.from_user.id, topic.id)
+        if updated:
+            text, keyboard = _topic_card(updated)
+            await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action == "synthesis":
         await query.edit_message_text("Synthesising the week…")
@@ -899,6 +885,10 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception:  # noqa: BLE001
             logger.exception("panel /check failed for topic {}", topic.id)
             await query.message.reply_text("Something went wrong — try again.")  # type: ignore[union-attr]
+        updated = await store.get_topic(query.from_user.id, topic.id)
+        if updated:
+            text, keyboard = _topic_card(updated)
+            await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action in ("pause", "resume"):
         paused = action == "pause"
