@@ -1224,6 +1224,9 @@ _LANGUAGE_OPTIONS = [
     ("🇵🇹 Português", "Portuguese"),
 ]
 
+# Maps stored language key → native display name (e.g. "Russian" → "Русский")
+_LANGUAGE_NATIVE = {key: label.split(" ", 1)[1] for label, key in _LANGUAGE_OPTIONS}
+
 _LANGUAGE_CONFIRMED = {
     "English": "✓ Digests will now be written in English.",
     "Russian": "✓ Дайджесты теперь будут на русском языке.",
@@ -1289,7 +1292,7 @@ async def cmd_language(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     buttons.append([InlineKeyboardButton(other_label, callback_data="lang:__other__")])
     await update.message.reply_text(
-        prompt_tpl.format(lang=current),
+        prompt_tpl.format(lang=_LANGUAGE_NATIVE.get(current, current)),
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="Markdown",
     )
