@@ -86,70 +86,64 @@ _SCHED_TYPE_LABELS: dict[str, str] = {
     "biweekly": "Every 2 weeks",
 }
 
-# Localised schedule strings keyed by language → freq → label
-_SCHED_L10N: dict[str, dict[str, str]] = {
-    "Russian": {
-        "daily": "Каждый день",
-        "twice_daily": "Дважды в день",
-        "weekdays": "Пн–Пт",
-        "mwf": "Пн/Ср/Пт",
-        "tuth": "Вт/Чт",
-        "custom_days": "Выбранные дни",
-        "weekly": "Раз в неделю",
-        "biweekly": "Раз в две недели",
-    },
-    "Spanish": {
-        "daily": "Cada día",
-        "twice_daily": "Dos veces al día",
-        "weekdays": "Lun–Vie",
-        "mwf": "Lun/Mié/Vie",
-        "tuth": "Mar/Jue",
-        "custom_days": "Días elegidos",
-        "weekly": "Una vez a la semana",
-        "biweekly": "Cada dos semanas",
-    },
-    "French": {
-        "daily": "Chaque jour",
-        "twice_daily": "Deux fois par jour",
-        "weekdays": "Lun–Ven",
-        "mwf": "Lun/Mer/Ven",
-        "tuth": "Mar/Jeu",
-        "custom_days": "Jours choisis",
-        "weekly": "Une fois par semaine",
-        "biweekly": "Toutes les deux semaines",
-    },
-    "German": {
-        "daily": "Täglich",
-        "twice_daily": "Zweimal täglich",
-        "weekdays": "Mo–Fr",
-        "mwf": "Mo/Mi/Fr",
-        "tuth": "Di/Do",
-        "custom_days": "Gewählte Tage",
-        "weekly": "Einmal pro Woche",
-        "biweekly": "Alle zwei Wochen",
-    },
+# ---------------------------------------------------------------------------
+# UI localisation — English source strings only.
+# All other languages are translated on demand by _ensure_ui() via LLM.
+# ---------------------------------------------------------------------------
+
+# Keys starting with "sched_" are schedule-type labels.
+# Keys "dow_0"…"dow_6" are full day names; "dows_0"…"dows_6" are short.
+# "topics_header" uses {n} as the count placeholder.
+_UI: dict[str, str] = {
+    # Messages
+    "fetch_status": "⏳ *Fetching digest for {name}…*\n_This takes 1–2 minutes. Other commands won't respond until it's done._",  # noqa: E501
+    "fetch_card": "⏳ _Fetching digest…_",
+    "fetch_short": "Running digest for *{name}*…",
+    "synthesising": "Synthesising the week…",
+    "err_generic": "Something went wrong — try again.",
+    "err_moment": "Something went wrong — try again in a moment.",
+    "err_synthesis": "Synthesis failed — try again.",
+    "err_synthesis2": "Synthesis failed — try again in a moment.",
+    "no_topics": "You have no topics yet. Use /add\\_topic to create one.",
+    "topic_nf": "Topic not found.",
+    "cancelled": "Cancelled.",
+    "paused_lbl": "⏸ paused",
+    "never_sent": "never sent",
+    "cleared_n": "✓ Cleared {n} seen articles for *{name}*. Use /check to fetch fresh results.",
+    "fb_noted": "✓ Noted — I'll adjust future digests.",
+    "fb_skip": "No problem, skipped.",
+    "fb_err": "Couldn't save that — try again later.",
+    "no_overflow": "No extended analysis available — use /check to get a fresh digest.",
+    "topics_header": "Your {n} topic(s):",
+    # Schedule type labels
+    "sched_daily": "Every day",
+    "sched_twice_daily": "Twice daily",
+    "sched_weekdays": "Mon–Fri",
+    "sched_mwf": "Mon/Wed/Fri",
+    "sched_tuth": "Tue/Thu",
+    "sched_custom_days": "Pick days…",
+    "sched_weekly": "Once a week",
+    "sched_biweekly": "Every 2 weeks",
+    # Day-of-week full names (Mon=0 … Sun=6)
+    "dow_0": "Monday",
+    "dow_1": "Tuesday",
+    "dow_2": "Wednesday",
+    "dow_3": "Thursday",
+    "dow_4": "Friday",
+    "dow_5": "Saturday",
+    "dow_6": "Sunday",
+    # Day-of-week short names
+    "dows_0": "Mon",
+    "dows_1": "Tue",
+    "dows_2": "Wed",
+    "dows_3": "Thu",
+    "dows_4": "Fri",
+    "dows_5": "Sat",
+    "dows_6": "Sun",
 }
 
-_DOW_LABELS_L10N: dict[str, list[str]] = {
-    "Russian": ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"],
-    "Spanish": ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"],
-    "French": ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"],
-    "German": ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"],
-}
-
-_DOW_SHORT_L10N: dict[str, list[str]] = {
-    "Russian": ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"],
-    "Spanish": ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"],
-    "French": ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"],
-    "German": ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"],
-}
-
-_TOPICS_HEADER_L10N: dict[str, str] = {
-    "Russian": "Ваши {} тем:",
-    "Spanish": "Tus {} tema(s):",
-    "French": "Vos {} sujet(s) :",
-    "German": "Ihre {} Themen:",
-}
+# Two-level cache: {lang: {key: translated_string}}
+_ui_cache: dict[str, dict[str, str]] = {"English": _UI}
 
 # Frequency types that require a day-selection step
 _NEEDS_DAYS = frozenset({"custom_days", "weekly", "biweekly"})
@@ -169,6 +163,66 @@ _TIMEZONES = [
     ("UTC+9  Tokyo", "Asia/Tokyo"),
     ("UTC+10  Sydney", "Australia/Sydney"),
 ]
+
+# ---------------------------------------------------------------------------
+# UI translations
+# ---------------------------------------------------------------------------
+
+_lang_cache: dict[int, str] = {}
+
+
+async def _ensure_ui(lang: str) -> None:
+    """Translate all UI strings to *lang* on first use — one LLM batch call per language.
+
+    Placeholders like {name} or {n} must survive translation intact. We instruct
+    the LLM to preserve them, and fall back to English if the result is unusable.
+    """
+    if lang in _ui_cache:
+        return
+    import json
+
+    from pydantic_ai import Agent as _A
+
+    from agent.services.llm import build_model as _bm
+
+    agent: _A[None, str] = _A(
+        _bm("fast"),
+        output_type=str,
+        system_prompt=(
+            f"Translate all JSON string values into {lang}. "
+            "Rules you must follow:\n"
+            "- Preserve every {placeholder} in curly braces exactly — do not translate the word inside.\n"  # noqa: E501
+            "- Preserve Telegram Markdown symbols (* _ ` \\) exactly.\n"
+            "- Preserve emoji characters exactly.\n"
+            "- Return ONLY valid JSON with the same keys, no extra text or code fences."
+        ),
+    )
+    try:
+        result = await agent.run(json.dumps(_UI, ensure_ascii=False))
+        translated = json.loads(result.output)
+        _ui_cache[lang] = {k: str(v) for k, v in translated.items() if isinstance(v, str)}
+        # Fill any missing keys with English fallback
+        for k, v in _UI.items():
+            _ui_cache[lang].setdefault(k, v)
+    except Exception:
+        logger.warning("UI translation failed for {} — falling back to English", lang)
+        _ui_cache[lang] = _UI
+
+
+def _t(lang: str, key: str, **fmt: object) -> str:
+    """Return a translated UI string, falling back to English."""  # noqa: E501 — cache warmed by _lang()
+    s = _ui_cache.get(lang, _UI).get(key) or _UI[key]
+    return s.format(**fmt) if fmt else s
+
+
+async def _lang(telegram_id: int) -> str:
+    """Return cached user language, fetching from DB on first access and warming the UI cache."""
+    if telegram_id not in _lang_cache:
+        lang = await store.get_user_language(telegram_id)
+        _lang_cache[telegram_id] = lang
+        await _ensure_ui(lang)
+    return _lang_cache[telegram_id]
+
 
 # ---------------------------------------------------------------------------
 # Auth helper
@@ -598,7 +652,8 @@ async def _update_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     topic = await store.get_topic(tg.id, topic_id)
     if topic is None:
         if update.message:
-            await update.message.reply_text("Topic not found.")
+            ul_s = await _lang(tg.id)
+            await update.message.reply_text(_t(ul_s, "topic_nf"))
         return ConversationHandler.END
 
     freq = ud.pop("new_topic_freq", "daily")
@@ -760,7 +815,9 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ):
             context.user_data.pop(key, None)
     if update.message:
-        await update.message.reply_text("Cancelled.")
+        tg_c = update.effective_user
+        ul_c = await _lang(tg_c.id) if tg_c else "English"
+        await update.message.reply_text(_t(ul_c, "cancelled"))
     return ConversationHandler.END
 
 
@@ -783,17 +840,20 @@ def _sched_label(topic: Topic, lang: str = "English") -> str:
 
 
 def _sched_label_data(
-    freq: str, hour: int, minute: int, dow: int, schedule_days: str, timezone: str,
+    freq: str,
+    hour: int,
+    minute: int,
+    dow: int,
+    schedule_days: str,
+    timezone: str,
     lang: str = "English",
 ) -> str:
-    type_labels = _SCHED_L10N.get(lang, _SCHED_TYPE_LABELS)
-    dow_labels = _DOW_LABELS_L10N.get(lang, _DOW_LABELS)
-    dow_short = _DOW_SHORT_L10N.get(lang, _DOW_SHORT)
-    freq_name = type_labels.get(freq, _SCHED_TYPE_LABELS.get(freq, freq))
+    sched_key = f"sched_{freq}"
+    freq_name = _t(lang, sched_key) if sched_key in _UI else _SCHED_TYPE_LABELS.get(freq, freq)
     if freq in {"weekly", "biweekly"}:
-        freq_name = f"{freq_name} ({dow_labels[dow]})"
+        freq_name = f"{freq_name} ({_t(lang, f'dow_{dow}')})"
     elif freq == "custom_days" and schedule_days:
-        freq_name = " / ".join(dow_short[int(d)] for d in schedule_days.split(",") if d.strip())
+        freq_name = " / ".join(_t(lang, f"dows_{d}") for d in schedule_days.split(",") if d.strip())
     tz_short = next((lbl.split()[0] for lbl, z in _TIMEZONES if z == timezone), "")
     time_str = f"{hour:02d}:{minute:02d}"
     if tz_short:
@@ -822,8 +882,7 @@ async def _topic_picker(
             )
         return
     buttons = [
-        [InlineKeyboardButton(t.shown_name, callback_data=f"ta:{action}:{t.id}")]
-        for t in topics
+        [InlineKeyboardButton(t.shown_name, callback_data=f"ta:{action}:{t.id}")] for t in topics
     ]
     if update.message:
         await update.message.reply_text(prompt, reply_markup=InlineKeyboardMarkup(buttons))
@@ -843,46 +902,46 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     from uuid import UUID
 
+    ul = await _lang(query.from_user.id)
     topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
     if topic is None:
-        await query.edit_message_text("Topic not found.")
+        await query.edit_message_text(_t(ul, "topic_nf"))
         return
 
     if action == "check":
         await query.edit_message_text(
-            f"Running digest for *{_short(topic.name)}*…", parse_mode="Markdown"
+            _t(ul, "fetch_short", name=_short(topic.shown_name)), parse_mode="Markdown"
         )
         try:
             await jobs._run_digest(topic, context.bot)
         except Exception:  # noqa: BLE001
             logger.exception("picker /check failed for topic {}", topic.id)
-            await query.message.reply_text("Something went wrong — try again in a moment.")  # type: ignore[union-attr]
+            await query.message.reply_text(_t(ul, "err_moment"))  # type: ignore[union-attr]
         updated = await store.get_topic(query.from_user.id, topic.id)
         if updated:
-            text, keyboard = _topic_card(updated)
+            text, keyboard = _topic_card(updated, ul)
             await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action == "synthesis":
-        await query.edit_message_text("Synthesising the week…")
+        await query.edit_message_text(_t(ul, "synthesising"))
         try:
             await jobs._run_synthesis(topic, context.bot)
         except Exception:  # noqa: BLE001
             logger.exception("picker /synthesis failed for topic {}", topic.id)
-            await query.message.reply_text("Synthesis failed — try again.")  # type: ignore[union-attr]
+            await query.message.reply_text(_t(ul, "err_synthesis"))  # type: ignore[union-attr]
 
     elif action == "pause":
         await store.update_topic(topic.id, paused=True)
-        await query.edit_message_text(f"⏸ *{topic.name}* paused.", parse_mode="Markdown")
+        await query.edit_message_text(f"⏸ *{topic.shown_name}* paused.", parse_mode="Markdown")
 
     elif action == "resume":
         await store.update_topic(topic.id, paused=False)
-        await query.edit_message_text(f"▶ *{topic.name}* resumed.", parse_mode="Markdown")
+        await query.edit_message_text(f"▶ *{topic.shown_name}* resumed.", parse_mode="Markdown")
 
     elif action == "reset":
         n = await store.clear_seen(topic.id)
         await query.edit_message_text(
-            f"✓ Cleared {n} seen articles for *{_short(topic.name)}*. "
-            "Next /check will fetch fresh content.",
+            _t(ul, "cleared_n", n=n, name=_short(topic.shown_name)),
             parse_mode="Markdown",
         )
 
@@ -932,13 +991,14 @@ async def on_topic_delete_confirm(update: Update, _ctx: ContextTypes.DEFAULT_TYP
 
     from uuid import UUID
 
+    ul_del = await _lang(query.from_user.id)
     if action == "cancel":
-        await query.edit_message_text("Cancelled.")
+        await query.edit_message_text(_t(ul_del, "cancelled"))
         return
 
     topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
     if topic is None:
-        await query.edit_message_text("Topic not found.")
+        await query.edit_message_text(_t(ul_del, "topic_nf"))
         return
 
     await store.delete_topic(topic.id)
@@ -961,7 +1021,8 @@ async def on_tz_set(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
     if topic is None:
-        await query.edit_message_text("Topic not found.")
+        ul_tz = await _lang(query.from_user.id)
+        await query.edit_message_text(_t(ul_tz, "topic_nf"))
         return
 
     await store.update_topic(topic.id, timezone=zone)
@@ -996,10 +1057,12 @@ async def _show_sources_view(query: object, topic: Topic) -> None:
         rows.append([InlineKeyboardButton(f"✖ {s}", callback_data=f"tp:rm_src:{tid}:{i}")])
     for i, s in enumerate(ignored):
         rows.append([InlineKeyboardButton(f"🚫 {s}", callback_data=f"tp:rm_blk:{tid}:{i}")])
-    rows.append([
-        InlineKeyboardButton("➕ Always check", callback_data=f"tp:add_src:{tid}"),
-        InlineKeyboardButton("🚫 Always ignore", callback_data=f"tp:add_blk:{tid}"),
-    ])
+    rows.append(
+        [
+            InlineKeyboardButton("➕ Always check", callback_data=f"tp:add_src:{tid}"),
+            InlineKeyboardButton("🚫 Always ignore", callback_data=f"tp:add_blk:{tid}"),
+        ]
+    )
     rows.append([InlineKeyboardButton("← Back", callback_data=f"tp:back:{tid}")])
     await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
@@ -1025,22 +1088,20 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     from uuid import UUID
 
+    lang = await _lang(query.from_user.id)
     topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
     if topic is None:
-        await query.edit_message_text("Topic not found.")
+        await query.edit_message_text(_t(lang, "topic_nf"))
         return
-
-    lang = await store.get_user_language(query.from_user.id)
 
     if action == "check":
         # Show running state inside the card (under the title, buttons stay)
         _, card_keyboard = _topic_card(topic, lang)
         query_text = topic.shown_description or topic.shown_name
-        last = topic.last_sent_at.strftime("%d %b") if topic.last_sent_at else "never sent"
+        never = _t(lang, "never_sent")
+        last = topic.last_sent_at.strftime("%d %b") if topic.last_sent_at else never
         running_text = (
-            f"📌 *{topic.shown_name}*\n"
-            f"⏳ _Fetching digest…_\n"
-            f"_{query_text}  ·  {last}_"
+            f"📌 *{topic.shown_name}*\n{_t(lang, 'fetch_card')}\n_{query_text}  ·  {last}_"
         )
         await query.edit_message_text(
             running_text, reply_markup=card_keyboard, parse_mode="Markdown"
@@ -1048,10 +1109,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Also send a separate status message below the card
         status = await context.bot.send_message(
             chat_id=topic.telegram_id,
-            text=(
-                f"⏳ *Fetching digest for {topic.shown_name}…*\n"
-                "_This takes 1–2 minutes. Other commands won't respond until it's done._"
-            ),
+            text=_t(lang, "fetch_status", name=topic.shown_name),
             parse_mode="Markdown",
         )
         failed = False
@@ -1063,9 +1121,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         with contextlib.suppress(Exception):
             await status.delete()
         if failed:
-            await context.bot.send_message(
-                chat_id=topic.telegram_id, text="Something went wrong — try again."
-            )
+            await context.bot.send_message(chat_id=topic.telegram_id, text=_t(lang, "err_generic"))
         updated = await store.get_topic(query.from_user.id, topic.id)
         if updated:
             text, keyboard = _topic_card(updated, lang)
@@ -1083,7 +1139,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         n = await store.clear_seen(topic.id)
         text, keyboard = _topic_card(topic, lang)
         await query.edit_message_text(
-            text + f"\n\n✓ Cleared {n} seen articles.",
+            text + f"\n\n{_t(lang, 'cleared_n', n=n, name=_short(topic.shown_name))}",
             reply_markup=keyboard,
             parse_mode="Markdown",
         )
@@ -1203,8 +1259,8 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 def _topic_card_text(t: Topic, lang: str = "English") -> str:
     query_text = t.shown_description or t.shown_name
-    status = "⏸ paused" if t.paused else _sched_label(t, lang)
-    last = t.last_sent_at.strftime("%d %b") if t.last_sent_at else "never sent"
+    status = _t(lang, "paused_lbl") if t.paused else _sched_label(t, lang)
+    last = t.last_sent_at.strftime("%d %b") if t.last_sent_at else _t(lang, "never_sent")
     return f"📌 *{t.shown_name}*\n_{query_text}  ·  {status}  ·  {last}_"
 
 
@@ -1262,8 +1318,7 @@ async def cmd_topics(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
             "You have no topics yet. Use /add\\_topic to create one.", parse_mode="Markdown"
         )
         return
-    header_tpl = _TOPICS_HEADER_L10N.get(lang, "Your {} topic(s):")
-    await update.message.reply_text(header_tpl.format(len(topics)))
+    await update.message.reply_text(_t(lang, "topics_header", n=len(topics)))
     for t in topics:
         text, keyboard = _topic_card(t, lang)
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")
@@ -1355,13 +1410,13 @@ async def cmd_language(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if tg is None:
         return
     current = await store.get_user_language(tg.id)
-    prompt_tpl, other_label = _LANGUAGE_PROMPT.get(
-        current, _LANGUAGE_PROMPT["English"]
-    )
+    prompt_tpl, other_label = _LANGUAGE_PROMPT.get(current, _LANGUAGE_PROMPT["English"])
     buttons = [
-        [InlineKeyboardButton(  # noqa: E501
-            f"{'✓ ' if lang == current else ''}{label}", callback_data=f"lang:{lang}"
-        )]
+        [
+            InlineKeyboardButton(  # noqa: E501
+                f"{'✓ ' if lang == current else ''}{label}", callback_data=f"lang:{lang}"
+            )
+        ]
         for label, lang in _LANGUAGE_OPTIONS
     ]
     buttons.append([InlineKeyboardButton(other_label, callback_data="lang:__other__")])
@@ -1430,7 +1485,7 @@ async def _cb_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     tg = update.effective_user
     if tg is None:
         return
-    lang = query.data[len("lang:"):]
+    lang = query.data[len("lang:") :]
     if lang == "__other__":
         context.user_data["awaiting_language"] = True  # type: ignore[index]
         current = await store.get_user_language(tg.id)
@@ -1449,6 +1504,7 @@ async def _cb_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await query.edit_message_text(prompt, parse_mode="Markdown")
         return
     await store.set_user_language(tg.id, lang)
+    _lang_cache[tg.id] = lang
     confirm = _LANGUAGE_CONFIRMED.get(lang, f"✓ Digests will now be written in {lang}.")
     await query.edit_message_text(confirm)
     await _translate_topics(tg.id, lang)
@@ -1465,6 +1521,7 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tg = update.effective_user
     if tg is None:
         return
+    ul = await _lang(tg.id)
     name = " ".join(context.args or []).strip()
     if not name:
         await _topic_picker(update, tg.id, "check", "Which topic?")
@@ -1474,14 +1531,13 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
         return
     await update.message.chat.send_action(ChatAction.TYPING)
-    await update.message.reply_text(
-        f"Running digest for *{_short(topic.name)}*…", parse_mode="Markdown"
-    )
+    fetch_msg = _t(ul, "fetch_short", name=_short(topic.shown_name))
+    await update.message.reply_text(fetch_msg, parse_mode="Markdown")
     try:
         await jobs._run_digest(topic, context.bot)
     except Exception:  # noqa: BLE001
         logger.exception("/check failed for topic {}", topic.id)
-        await update.message.reply_text("Something went wrong — try again in a moment.")
+        await update.message.reply_text(_t(ul, "err_moment"))
 
 
 # ---------------------------------------------------------------------------
@@ -1495,11 +1551,10 @@ async def cmd_more(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tg = update.effective_user
     if tg is None:
         return
+    ul = await _lang(tg.id)
     overflow = jobs.get_overflow(tg.id)
     if not overflow:
-        await update.message.reply_text(
-            "No extended analysis stored — request a fresh digest with /check."
-        )
+        await update.message.reply_text(_t(ul, "no_overflow"))
         return
     await update.message.reply_text(overflow)
 
@@ -1515,6 +1570,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tg = update.effective_user
     if tg is None:
         return
+    ul = await _lang(tg.id)
     name = " ".join(context.args or []).strip()
     if not name:
         await _topic_picker(update, tg.id, "reset", "Reset which topic?")
@@ -1525,9 +1581,7 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     n = await store.clear_seen(topic.id)
     await update.message.reply_text(
-        f"✓ Cleared {n} seen articles for *{_short(topic.name)}*. "
-        "Next /check will fetch fresh content.",
-        parse_mode="Markdown",
+        _t(ul, "cleared_n", n=n, name=_short(topic.shown_name)), parse_mode="Markdown"
     )
 
 
@@ -1618,6 +1672,7 @@ async def cmd_synthesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     tg = update.effective_user
     if tg is None:
         return
+    ul = await _lang(tg.id)
     name = " ".join(context.args or []).strip()
     if not name:
         await _topic_picker(update, tg.id, "synthesis", "Which topic?")
@@ -1627,12 +1682,12 @@ async def cmd_synthesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
         return
     await update.message.chat.send_action(ChatAction.TYPING)
-    await update.message.reply_text("Synthesising the week…")
+    await update.message.reply_text(_t(ul, "synthesising"))
     try:
         await jobs._run_synthesis(topic, context.bot)
     except Exception:  # noqa: BLE001
         logger.exception("/synthesis failed for topic {}", topic.id)
-        await update.message.reply_text("Synthesis failed — try again in a moment.")
+        await update.message.reply_text(_t(ul, "err_synthesis2"))
 
 
 # ---------------------------------------------------------------------------
@@ -1793,6 +1848,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     text = update.message.text.strip()
     ud = context.user_data
+    tg_user = update.effective_user
+    ul = await _lang(tg_user.id) if tg_user else "English"
 
     if text.lower() == "/cancel" and ud is not None:
         for key in (
@@ -1808,7 +1865,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "awaiting_language",
         ):
             ud.pop(key, None)
-        await update.message.reply_text("Cancelled.")
+        await update.message.reply_text(_t(ul, "cancelled"))
         return
 
     # Free-text language input (triggered by "Other" in /language)
@@ -1817,6 +1874,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if tg is not None and text:
             ud["awaiting_language"] = False
             await store.set_user_language(tg.id, text)
+            _lang_cache[tg.id] = text
             confirm = _LANGUAGE_CONFIRMED.get(text, f"✓ Digests will now be written in {text}.")
             await update.message.reply_text(confirm)
             await _translate_topics(tg.id, text)
@@ -1867,7 +1925,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         domain = text.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
         topic = await store.get_topic(update.effective_user.id, topic_id)  # type: ignore[union-attr]
         if topic is None:
-            await update.message.reply_text("Topic not found.")
+            await update.message.reply_text(_t(ul, "topic_nf"))
             return
         if domain not in topic.sources:
             await store.update_topic(topic_id, sources=[*topic.sources, domain])
@@ -1885,7 +1943,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         domain = text.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
         topic = await store.get_topic(update.effective_user.id, topic_id)  # type: ignore[union-attr]
         if topic is None:
-            await update.message.reply_text("Topic not found.")
+            await update.message.reply_text(_t(ul, "topic_nf"))
             return
         if domain not in topic.excluded_sources:
             await store.update_topic(topic_id, excluded_sources=[*topic.excluded_sources, domain])
@@ -1901,12 +1959,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if text.lower() != "/skip":
             try:
                 await store.append_feedback_note(topic_id_fb, text)
-                await update.message.reply_text("✓ Noted — I'll adjust future digests.")
+                await update.message.reply_text(_t(ul, "fb_noted"))
             except Exception:  # noqa: BLE001
                 logger.warning("failed to save correction for topic {}", topic_id_fb)
-                await update.message.reply_text("Couldn't save that — try again later.")
+                await update.message.reply_text(_t(ul, "fb_err"))
         else:
-            await update.message.reply_text("No problem, skipped.")
+            await update.message.reply_text(_t(ul, "fb_skip"))
         return
 
     await update.message.reply_text(
@@ -1924,17 +1982,29 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
     await store.apply_migrations()
     await app.bot.delete_my_commands()
+    _cmds_en = [
+        BotCommand("start", "Main menu"),
+        BotCommand("topics", "Show all your topics"),
+        BotCommand("add_topic", "Track a new topic"),
+        BotCommand("check", "Get a digest now"),
+        BotCommand("more", "Full analysis from last digest"),
+        BotCommand("synthesis", "Weekly synthesis for a topic"),
+        BotCommand("timezone", "Update timezone for a topic"),
+        BotCommand("language", "Set digest language"),
+    ]
+    await app.bot.set_my_commands(_cmds_en)
     await app.bot.set_my_commands(
         [
-            BotCommand("start", "Main menu"),
-            BotCommand("topics", "Show all your topics"),
-            BotCommand("add_topic", "Track a new topic"),
-            BotCommand("check", "Get a digest now"),
-            BotCommand("more", "Full analysis from last digest"),
-            BotCommand("synthesis", "Weekly synthesis for a topic"),
-            BotCommand("timezone", "Update timezone for a topic"),
-            BotCommand("language", "Set digest language"),
-        ]
+            BotCommand("start", "Главное меню"),
+            BotCommand("topics", "Ваши темы"),
+            BotCommand("add_topic", "Добавить тему"),
+            BotCommand("check", "Получить дайджест сейчас"),
+            BotCommand("more", "Полный анализ последнего дайджеста"),
+            BotCommand("synthesis", "Недельный синтез по теме"),
+            BotCommand("timezone", "Изменить часовой пояс"),
+            BotCommand("language", "Язык дайджестов"),
+        ],
+        language_code="ru",
     )
 
 

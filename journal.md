@@ -155,3 +155,19 @@ early return, then the "how long since last sent" check.
 
 *DB:* Migration 003 adds `send_minute INT DEFAULT 0` and `schedule_days TEXT DEFAULT ''`.
 Both backward compatible — existing topics default to minute=0 and no custom days.
+
+## 2026-06-18 — Switched UI localisation from hardcoded dicts to LLM-on-demand
+
+Was maintaining `_TR` with 5 language copies of every UI string — and still missing Arabic,
+Chinese, Portuguese. User asked the obvious question: why not just have a module do this?
+
+Replaced the whole `_TR` / `_SCHED_L10N` / `_DOW_LABELS_L10N` etc. stack with:
+- `_UI` dict — English source strings only, the single truth
+- `_ensure_ui(lang)` — one LLM call (fast model) that batch-translates all ~35 strings
+  into a new language and caches the result in `_ui_cache`
+- `_lang()` calls `_ensure_ui()` on first access, so every handler gets warm cache for free
+
+`_t(lang, key, **fmt)` stays synchronous — no changes to the 30+ call sites.
+
+Trade-off: first time a user sends a command in a new language, there's a small delay for
+the LLM call (~1s). Every request after that is instant. Acceptable for rare language changes.
