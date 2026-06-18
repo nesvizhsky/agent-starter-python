@@ -1215,13 +1215,13 @@ async def cmd_timezone(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 _LANGUAGE_OPTIONS = [
     ("🇬🇧 English", "English"),
-    ("🇷🇺 Russian", "Russian"),
-    ("🇪🇸 Spanish", "Spanish"),
-    ("🇫🇷 French", "French"),
-    ("🇩🇪 German", "German"),
-    ("🇸🇦 Arabic", "Arabic"),
-    ("🇨🇳 Chinese", "Chinese"),
-    ("🇵🇹 Portuguese", "Portuguese"),
+    ("🇷🇺 Русский", "Russian"),
+    ("🇪🇸 Español", "Spanish"),
+    ("🇫🇷 Français", "French"),
+    ("🇩🇪 Deutsch", "German"),
+    ("🇸🇦 العربية", "Arabic"),
+    ("🇨🇳 中文", "Chinese"),
+    ("🇵🇹 Português", "Portuguese"),
 ]
 
 _LANGUAGE_CONFIRMED = {
