@@ -1221,6 +1221,17 @@ _LANGUAGE_OPTIONS = [
     ("🇵🇹 Portuguese", "Portuguese"),
 ]
 
+_LANGUAGE_CONFIRMED = {
+    "English": "✓ Digests will now be written in English.",
+    "Russian": "✓ Дайджесты теперь будут на русском языке.",
+    "Spanish": "✓ Los resúmenes se escribirán en español.",
+    "French": "✓ Les résumés seront désormais rédigés en français.",
+    "German": "✓ Die Digests werden jetzt auf Deutsch geschrieben.",
+    "Arabic": "✓ سيتم كتابة الملخصات باللغة العربية.",
+    "Chinese": "✓ 摘要将以中文撰写。",
+    "Portuguese": "✓ Os resumos serão escritos em português.",
+}
+
 
 async def cmd_language(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None or not await _allowed(update):
@@ -1260,9 +1271,8 @@ async def _cb_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
     await store.set_user_language(tg.id, lang)
-    await query.edit_message_text(
-        f"✓ Digests will now be written in *{lang}*.", parse_mode="Markdown"
-    )
+    confirm = _LANGUAGE_CONFIRMED.get(lang, f"✓ Digests will now be written in {lang}.")
+    await query.edit_message_text(confirm)
 
 
 # ---------------------------------------------------------------------------
@@ -1628,9 +1638,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if tg is not None and text:
             ud["awaiting_language"] = False
             await store.set_user_language(tg.id, text)
-            await update.message.reply_text(
-                f"✓ Digests will now be written in *{text}*.", parse_mode="Markdown"
-            )
+            confirm = _LANGUAGE_CONFIRMED.get(text, f"✓ Digests will now be written in {text}.")
+            await update.message.reply_text(confirm)
         return
 
     # Inline rename (triggered by ✏️ Rename button on topic card)
