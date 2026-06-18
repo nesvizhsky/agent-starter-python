@@ -1684,25 +1684,16 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
     await store.apply_migrations()
+    await app.bot.delete_my_commands()
     await app.bot.set_my_commands(
         [
-            BotCommand("start", "Welcome / help"),
+            BotCommand("start", "Main menu"),
+            BotCommand("topics", "Show all your topics"),
             BotCommand("add_topic", "Track a new topic"),
-            BotCommand("topics", "List your topics"),
-            BotCommand("check", "Get a digest now: /check <topic>"),
+            BotCommand("check", "Get a digest now"),
             BotCommand("more", "Full analysis from last digest"),
-            BotCommand("synthesis", "Weekly synthesis: /synthesis <topic>"),
-            BotCommand("schedule", "Change when a topic sends: /schedule <topic>"),
+            BotCommand("synthesis", "Weekly synthesis for a topic"),
             BotCommand("timezone", "Update timezone for a topic"),
-            BotCommand("pause", "Pause updates: /pause <topic>"),
-            BotCommand("resume", "Resume updates: /resume <topic>"),
-            BotCommand("add_source", "Add a source: /add_source <topic> <source>"),
-            BotCommand("del_source", "Remove a source: /del_source <topic> <source>"),
-            BotCommand("persona", "Pin a persona: /persona <topic> <key>"),
-            BotCommand("reset", "Clear seen articles: /reset <topic>"),
-            BotCommand("rename", "Rename a topic: /rename <old> | <new>"),
-            BotCommand("describe", "Fix the research focus: /describe <topic> | <text>"),
-            BotCommand("delete_topic", "Delete a topic and all its history"),
         ]
     )
 
