@@ -35,7 +35,6 @@ _UPDATABLE_TOPIC_FIELDS = frozenset(
         "sources",
         "excluded_sources",
         "trusted_sources",
-        "pinned_persona",
         "feedback_notes",
         "source_guidance",
     }
@@ -310,18 +309,16 @@ async def record_digest(
     topic_id: UUID,
     telegram_id: int,
     content: str,
-    persona: str,
 ) -> UUID:
     row = await db.fetchrow(
         """
         INSERT INTO disputatio_digests (topic_id, telegram_id, content, persona)
-        VALUES ($1, $2, $3, $4)
+        VALUES ($1, $2, $3, 'none')
         RETURNING id
         """,
         topic_id,
         telegram_id,
         content,
-        persona,
     )
     return row["id"]  # type: ignore[index]
 

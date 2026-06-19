@@ -238,7 +238,7 @@ async def _run_digest(topic: Topic, bot: Bot) -> None:
     language = await store.get_user_language(topic.telegram_id)
     output = await digest.generate(stories, topic.feedback_notes, language)
 
-    digest_id = await store.record_digest(topic.id, topic.telegram_id, output.main, "none")
+    digest_id = await store.record_digest(topic.id, topic.telegram_id, output.main)
     await store.record_seen(topic.id, fresh, embeddings)
     await store.stamp_sent(topic.id)
 

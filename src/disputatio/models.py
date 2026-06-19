@@ -36,7 +36,6 @@ class Topic(BaseModel):
     sources: list[str]
     excluded_sources: list[str]
     trusted_sources: list[str]
-    pinned_persona: str | None
     feedback_notes: str | None
     source_guidance: str | None
     created_at: datetime
@@ -118,5 +117,4 @@ class Digest(BaseModel):
     topic_id: UUID
     telegram_id: int
     content: str
-    persona: str
     created_at: datetime

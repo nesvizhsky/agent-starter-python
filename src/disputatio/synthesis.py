@@ -113,7 +113,7 @@ def _format_prompt(topic_name: str, digests: list[Digest]) -> str:
     ]
     for i, digest in enumerate(digests, 1):
         date_str = digest.created_at.strftime("%Y-%m-%d")
-        lines.append(f"--- Digest {i} ({date_str}, persona: {digest.persona}) ---")
+        lines.append(f"--- Digest {i} ({date_str}) ---")
         lines.append(digest.content)
         lines.append("")
     return "\n".join(lines)
