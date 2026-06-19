@@ -15,7 +15,7 @@ from pathlib import Path
 from uuid import UUID
 
 from agent.services import db
-from disputatio.models import Article, Digest, Topic, User
+from disputatio.models import Article, Topic, User
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
@@ -48,10 +48,6 @@ def _vec(embedding: list[float]) -> str:
 
 def _topic(row: object) -> Topic:
     return Topic.model_validate(dict(row))  # type: ignore[arg-type]
-
-
-def _digest(row: object) -> Digest:
-    return Digest.model_validate(dict(row))  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -213,13 +209,6 @@ async def stamp_sent(topic_id: UUID) -> None:
     )
 
 
-async def stamp_synthesis(topic_id: UUID) -> None:
-    await db.execute(
-        "UPDATE disputatio_topics SET last_synthesis_at = now() WHERE id = $1",
-        topic_id,
-    )
-
-
 async def get_all_active_topics() -> list[Topic]:
     """Return all unpaused topics across all users. Used by the cron job."""
     rows = await db.fetch(
@@ -298,84 +287,6 @@ async def clear_seen(topic_id: UUID) -> int:
     n = int(row["n"]) if row else 0
     await db.execute("DELETE FROM disputatio_seen WHERE topic_id = $1", topic_id)
     return n
-
-
-# ---------------------------------------------------------------------------
-# Digests
-# ---------------------------------------------------------------------------
-
-
-async def record_digest(
-    topic_id: UUID,
-    telegram_id: int,
-    content: str,
-) -> UUID:
-    row = await db.fetchrow(
-        """
-        INSERT INTO disputatio_digests (topic_id, telegram_id, content, persona)
-        VALUES ($1, $2, $3, 'none')
-        RETURNING id
-        """,
-        topic_id,
-        telegram_id,
-        content,
-    )
-    return row["id"]  # type: ignore[index]
-
-
-async def get_recent_digests(topic_id: UUID, days: int) -> list[Digest]:
-    cutoff = datetime.now(UTC) - timedelta(days=days)
-    rows = await db.fetch(
-        """
-        SELECT * FROM disputatio_digests
-        WHERE topic_id = $1 AND created_at > $2
-        ORDER BY created_at
-        """,
-        topic_id,
-        cutoff,
-    )
-    return [_digest(r) for r in rows]
-
-
-# ---------------------------------------------------------------------------
-# Feedback
-# ---------------------------------------------------------------------------
-
-
-async def save_feedback(
-    telegram_id: int,
-    topic_id: UUID | None,
-    digest_id: UUID | None,
-    signal: str | None,
-    note: str | None,
-) -> None:
-    await db.execute(
-        """
-        INSERT INTO disputatio_feedback (telegram_id, topic_id, digest_id, signal, note)
-        VALUES ($1, $2, $3, $4, $5)
-        """,
-        telegram_id,
-        topic_id,
-        digest_id,
-        signal,
-        note,
-    )
-
-
-async def append_feedback_note(topic_id: UUID, note: str) -> None:
-    """Append a user correction to topic.feedback_notes (newline-separated)."""
-    await db.execute(
-        """
-        UPDATE disputatio_topics
-        SET feedback_notes = CASE
-            WHEN feedback_notes IS NULL THEN $2
-            ELSE feedback_notes || E'\n' || $2
-        END
-        WHERE id = $1
-        """,
-        topic_id,
-        note,
-    )
 
 
 async def delete_topic(topic_id: UUID) -> None:

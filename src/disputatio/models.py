@@ -24,7 +24,7 @@ class Topic(BaseModel):
     telegram_id: int
     name: str
     description: str | None
-    display_name: str | None = None         # translated display label (UI only)
+    display_name: str | None = None  # translated display label (UI only)
     display_description: str | None = None  # translated description (UI only)
     frequency: str  # daily|twice_daily|weekdays|mwf|tuth|custom_days|weekly|biweekly
     send_hour: int
@@ -40,7 +40,6 @@ class Topic(BaseModel):
     source_guidance: str | None
     created_at: datetime
     last_sent_at: datetime | None
-    last_synthesis_at: datetime | None
 
     @property
     def shown_name(self) -> str:
@@ -110,11 +109,3 @@ class Story(BaseModel):
     )
     source_views: list[SourceView]
     contradictions: list[Contradiction] = Field(default_factory=list)
-
-
-class Digest(BaseModel):
-    id: UUID
-    topic_id: UUID
-    telegram_id: int
-    content: str
-    created_at: datetime

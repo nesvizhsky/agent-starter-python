@@ -23,7 +23,7 @@ from telegram.ext import Application
 from agent.config import get_settings
 from agent.logging_setup import setup_logging
 from disputatio.bot import _post_init, build_application
-from disputatio.jobs import run_due_digests, run_due_syntheses
+from disputatio.jobs import run_due_digests
 
 _ptb: Application | None = None  # type: ignore[type-arg]
 
@@ -97,8 +97,7 @@ async def cron_tick(
     if ptb is None:
         raise HTTPException(status_code=503)
     digests = await run_due_digests(ptb.bot)
-    synths = await run_due_syntheses(ptb.bot)
-    return {"digests": digests, "syntheses": synths}
+    return {"digests": digests}
 
 
 def main() -> None:

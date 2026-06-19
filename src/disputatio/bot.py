@@ -66,8 +66,6 @@ async def _generate_name(description: str) -> str:
     return result.output.strip()
 
 
-_VALID_SIGNALS = {"good", "too_shallow", "too_long", "already_knew"}
-
 # ---------------------------------------------------------------------------
 # Schedule constants
 # ---------------------------------------------------------------------------
@@ -99,21 +97,14 @@ _UI: dict[str, str] = {
     "fetch_status": "⏳ *Fetching digest for {name}…*\n_This takes 1–2 minutes. Other commands won't respond until it's done._",  # noqa: E501
     "fetch_card": "⏳ _Fetching digest…_",
     "fetch_short": "Running digest for *{name}*…",
-    "synthesising": "Synthesising the week…",
     "err_generic": "Something went wrong — try again.",
     "err_moment": "Something went wrong — try again in a moment.",
-    "err_synthesis": "Synthesis failed — try again.",
-    "err_synthesis2": "Synthesis failed — try again in a moment.",
     "no_topics": "You have no topics yet. Use /add\\_topic to create one.",
     "topic_nf": "Topic not found.",
     "cancelled": "Cancelled.",
     "paused_lbl": "⏸ paused",
     "never_sent": "never sent",
     "cleared_n": "✓ Cleared {n} seen articles for *{name}*. Use /check to fetch fresh results.",
-    "fb_noted": "✓ Noted — I'll adjust future digests.",
-    "fb_skip": "No problem, skipped.",
-    "fb_err": "Couldn't save that — try again later.",
-    "no_overflow": "No extended analysis available — use /check to get a fresh digest.",
     "topics_header": "Your {n} topic(s):",
     # Schedule type labels
     "sched_daily": "Every day",
@@ -931,14 +922,6 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             text, keyboard = _topic_card(updated, ul)
             await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
-    elif action == "synthesis":
-        await query.edit_message_text(_t(ul, "synthesising"))
-        try:
-            await jobs._run_synthesis(topic, context.bot)
-        except Exception:  # noqa: BLE001
-            logger.exception("picker /synthesis failed for topic {}", topic.id)
-            await query.message.reply_text(_t(ul, "err_synthesis"))  # type: ignore[union-attr]
-
     elif action == "pause":
         await store.update_topic(topic.id, paused=True)
         await query.edit_message_text(f"⏸ *{topic.shown_name}* paused.", parse_mode="Markdown")
@@ -1550,25 +1533,6 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /more
-# ---------------------------------------------------------------------------
-
-
-async def cmd_more(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message is None or not await _allowed(update):
-        return
-    tg = update.effective_user
-    if tg is None:
-        return
-    ul = await _lang(tg.id)
-    overflow = jobs.get_overflow(tg.id)
-    if not overflow:
-        await update.message.reply_text(_t(ul, "no_overflow"))
-        return
-    await update.message.reply_text(overflow)
-
-
-# ---------------------------------------------------------------------------
 # /reset
 # ---------------------------------------------------------------------------
 
@@ -1668,35 +1632,6 @@ async def cmd_describe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Use /reset then /check to fetch fresh results with the new focus.",
         parse_mode="Markdown",
     )
-
-
-# ---------------------------------------------------------------------------
-# /synthesis
-# ---------------------------------------------------------------------------
-
-
-async def cmd_synthesis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message is None or not await _allowed(update):
-        return
-    tg = update.effective_user
-    if tg is None:
-        return
-    ul = await _lang(tg.id)
-    name = " ".join(context.args or []).strip()
-    if not name:
-        await _topic_picker(update, tg.id, "synthesis", "Which topic?")
-        return
-    topic = await store.get_topic_by_name(tg.id, name)
-    if topic is None:
-        await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
-        return
-    await update.message.chat.send_action(ChatAction.TYPING)
-    await update.message.reply_text(_t(ul, "synthesising"))
-    try:
-        await jobs._run_synthesis(topic, context.bot)
-    except Exception:  # noqa: BLE001
-        logger.exception("/synthesis failed for topic {}", topic.id)
-        await update.message.reply_text(_t(ul, "err_synthesis2"))
 
 
 # ---------------------------------------------------------------------------
@@ -1800,55 +1735,7 @@ async def cmd_del_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 # ---------------------------------------------------------------------------
-# Feedback callback (digest reaction buttons)
-# ---------------------------------------------------------------------------
-
-_NEGATIVE_SIGNALS = {"too_shallow", "too_long", "already_knew"}
-
-
-async def on_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if query is None or query.from_user is None or query.data is None:
-        return
-    await query.answer()
-
-    parts = query.data.split(":")
-    if len(parts) != 3:
-        return
-    _, signal, digest_id_str = parts
-    if signal not in _VALID_SIGNALS:
-        return
-
-    telegram_id = query.from_user.id
-    ids = jobs.get_last_digest_ids(telegram_id)
-    topic_id = ids[0] if ids else None
-
-    try:
-        from uuid import UUID
-
-        await store.save_feedback(
-            telegram_id=telegram_id,
-            topic_id=topic_id,
-            digest_id=UUID(digest_id_str),
-            signal=signal,
-            note=None,
-        )
-    except Exception:  # noqa: BLE001
-        logger.warning("failed to save feedback signal={} digest={}", signal, digest_id_str)
-
-    if signal == "good":
-        await query.edit_message_reply_markup(reply_markup=None)
-    else:
-        if context.user_data is not None:
-            context.user_data["awaiting_correction_topic"] = topic_id
-        await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text(  # type: ignore[union-attr]
-            "Got it. Want to tell me more? Type a correction or /skip."
-        )
-
-
-# ---------------------------------------------------------------------------
-# Free-text handler (corrections and /skip)
+# Free-text handler
 # ---------------------------------------------------------------------------
 
 
@@ -1961,24 +1848,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    # Feedback correction (triggered by 👎 button on digest)
-    topic_id_fb = ud.get("awaiting_correction_topic") if ud is not None else None
-    if topic_id_fb is not None and ud is not None:
-        ud.pop("awaiting_correction_topic")
-        if text.lower() != "/skip":
-            try:
-                await store.append_feedback_note(topic_id_fb, text)
-                await update.message.reply_text(_t(ul, "fb_noted"))
-            except Exception:  # noqa: BLE001
-                logger.warning("failed to save correction for topic {}", topic_id_fb)
-                await update.message.reply_text(_t(ul, "fb_err"))
-        else:
-            await update.message.reply_text(_t(ul, "fb_skip"))
-        return
-
     await update.message.reply_text(
-        "Use commands to interact:\n"
-        "/add\\_topic · /topics · /check · /more · /synthesis · /pause · /resume",
+        "Use commands to interact:\n/add\\_topic · /topics · /check · /pause · /resume",
         parse_mode="Markdown",
     )
 
@@ -1996,8 +1867,6 @@ async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
         BotCommand("topics", "Show all your topics"),
         BotCommand("add_topic", "Track a new topic"),
         BotCommand("check", "Get a digest now"),
-        BotCommand("more", "Full analysis from last digest"),
-        BotCommand("synthesis", "Weekly synthesis for a topic"),
         BotCommand("timezone", "Update timezone for a topic"),
         BotCommand("language", "Set digest language"),
     ]
@@ -2008,8 +1877,6 @@ async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
             BotCommand("topics", "Ваши темы"),
             BotCommand("add_topic", "Добавить тему"),
             BotCommand("check", "Получить дайджест сейчас"),
-            BotCommand("more", "Полный анализ последнего дайджеста"),
-            BotCommand("synthesis", "Недельный синтез по теме"),
             BotCommand("timezone", "Изменить часовой пояс"),
             BotCommand("language", "Язык дайджестов"),
         ],
@@ -2061,8 +1928,6 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("topics", cmd_topics))
     app.add_handler(CommandHandler("check", cmd_check))
-    app.add_handler(CommandHandler("more", cmd_more))
-    app.add_handler(CommandHandler("synthesis", cmd_synthesis))
     app.add_handler(CommandHandler("timezone", cmd_timezone))
     app.add_handler(CommandHandler("pause", cmd_pause))
     app.add_handler(CommandHandler("resume", cmd_resume))
@@ -2078,7 +1943,6 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CallbackQueryHandler(on_topic_action, pattern=r"^ta:"))
     app.add_handler(CallbackQueryHandler(on_topic_delete_confirm, pattern=r"^td:"))
     app.add_handler(CallbackQueryHandler(on_tz_set, pattern=r"^tzset:"))
-    app.add_handler(CallbackQueryHandler(on_feedback, pattern=r"^fb:"))
     app.add_handler(CallbackQueryHandler(_cb_language, pattern=r"^lang:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 

@@ -1,4 +1,4 @@
-"""Local entrypoint for `disputatio-cron`: force-run all due digests and syntheses.
+"""Local entrypoint for `disputatio-cron`: force-run all due digests.
 
     uv run disputatio-cron
 
@@ -15,7 +15,7 @@ from telegram import Bot
 from agent.config import get_settings
 from agent.logging_setup import setup_logging
 from disputatio import store
-from disputatio.jobs import run_due_digests, run_due_syntheses
+from disputatio.jobs import run_due_digests
 
 
 async def _run() -> None:
@@ -25,8 +25,7 @@ async def _run() -> None:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set.")
     async with Bot(token) as bot:
         digests = await run_due_digests(bot, force=True)
-        synths = await run_due_syntheses(bot, force=True)
-    logger.info("cron done — digests={} syntheses={}", digests, synths)
+    logger.info("cron done — digests={}", digests)
 
 
 def main() -> None:

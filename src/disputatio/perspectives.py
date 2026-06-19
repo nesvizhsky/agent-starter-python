@@ -126,9 +126,7 @@ async def cluster(
     _attach_contexts(stories, articles)
 
     # Detect contradictions for all stories concurrently.
-    contradiction_lists = await asyncio.gather(
-        *[_detect_contradictions(s) for s in stories]
-    )
+    contradiction_lists = await asyncio.gather(*[_detect_contradictions(s) for s in stories])
     for story, contradictions in zip(stories, contradiction_lists, strict=True):
         story.contradictions = contradictions
 

@@ -1,52 +1,27 @@
 """Cron job runners for Disputatio.
 
-`is_due` and `_is_synthesis_due` are pure functions (unit-testable offline).
-`run_due_digests` / `run_due_syntheses` loop all active topics, check due-ness,
-run the pipeline, and isolate per-topic failures.
-
-The overflow text from each digest is stored in a module-level dict keyed by
-telegram_id so the /more handler in bot.py can serve it. It's ephemeral (reset
-on restart), which is acceptable for MVP.
+`is_due` is a pure function (unit-testable offline).
+`run_due_digests` loops all active topics, checks due-ness,
+runs the pipeline, and isolates per-topic failures.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from loguru import logger
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 
-from disputatio import dedup, digest, perspectives, propaganda, research, store, synthesis
+from disputatio import dedup, digest, perspectives, propaganda, research, store
 from disputatio.models import Topic
-from disputatio.synthesis import SynthesisOutput
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 _TG_MAX = 4096  # Telegram hard limit for text messages
-
-# ---------------------------------------------------------------------------
-# Module-level caches (ephemeral — reset on restart)
-# ---------------------------------------------------------------------------
-
-# {telegram_id: overflow_text}
-_overflow: dict[int, str] = {}
-
-# {telegram_id: (topic_id, digest_id)} — the most recently sent digest per user
-_last_digest: dict[int, tuple[UUID, UUID]] = {}
-
-
-def get_overflow(telegram_id: int) -> str | None:
-    return _overflow.get(telegram_id)
-
-
-def get_last_digest_ids(telegram_id: int) -> tuple[UUID, UUID] | None:
-    """Return (topic_id, digest_id) for the last digest sent to this user."""
-    return _last_digest.get(telegram_id)
 
 
 # ---------------------------------------------------------------------------
@@ -112,34 +87,9 @@ def is_due(topic: Topic, now_local: datetime) -> bool:
             return False
 
 
-def _is_synthesis_due(topic: Topic, now_local: datetime) -> bool:
-    if topic.paused or now_local.hour != topic.send_hour:
-        return False
-    if topic.last_synthesis_at is None:
-        return False  # never synthesised → need at least one week of digests first
-    last = topic.last_synthesis_at.astimezone(ZoneInfo(topic.timezone))
-    return (now_local.date() - last.date()).days >= 7
-
-
 # ---------------------------------------------------------------------------
 # Send helpers
 # ---------------------------------------------------------------------------
-
-
-def _feedback_keyboard(digest_id: UUID) -> InlineKeyboardMarkup:
-    d = str(digest_id)
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("👍 Good", callback_data=f"fb:good:{d}"),
-                InlineKeyboardButton("👎 Not useful", callback_data=f"fb:bad:{d}"),
-            ],
-            [
-                InlineKeyboardButton("📚 Too shallow", callback_data=f"fb:too_shallow:{d}"),
-                InlineKeyboardButton("📖 Too long", callback_data=f"fb:too_long:{d}"),
-            ],
-        ]
-    )
 
 
 def _chunk_text(text: str, limit: int = _TG_MAX) -> list[str]:
@@ -184,12 +134,7 @@ def _topic_keyboard(topic: Topic) -> InlineKeyboardMarkup:
     )
 
 
-async def _send_digest(
-    bot: Bot,
-    topic: Topic,
-    output: digest.DigestOutput,
-    digest_id: UUID,
-) -> None:
+async def _send_digest(bot: Bot, topic: Topic, output: digest.DigestOutput) -> None:
     byline = f"<b>{topic.shown_name}</b>\n\n"
     chunks = _chunk_text(output.main)
     for i, chunk in enumerate(chunks):
@@ -237,36 +182,15 @@ async def _run_digest(topic: Topic, bot: Bot) -> None:
     language = await store.get_user_language(topic.telegram_id)
     output = await digest.generate(stories, topic.feedback_notes, language)
 
-    digest_id = await store.record_digest(topic.id, topic.telegram_id, output.main)
     await store.record_seen(topic.id, fresh, embeddings)
     await store.stamp_sent(topic.id)
-
-    await _send_digest(bot, topic, output, digest_id)
-
-    if output.overflow:
-        _overflow[topic.telegram_id] = output.overflow
-    _last_digest[topic.telegram_id] = (topic.id, digest_id)
+    await _send_digest(bot, topic, output)
 
     logger.info("digest sent: topic={}", topic.id)
 
 
-async def _run_synthesis(topic: Topic, bot: Bot) -> None:
-    """Weekly synthesis for one topic. Raises on failure (caller isolates)."""
-    logger.info("synthesis pipeline: topic={} name={!r}", topic.id, topic.name)
-    digests = await store.get_recent_digests(topic.id, days=7)
-    language = await store.get_user_language(topic.telegram_id)
-    result = await synthesis.generate(topic.name, digests, language)
-    if result is None:
-        logger.info("not enough digests to synthesise {!r}", topic.name)
-        return
-    for chunk in _chunk_text(_format_synthesis(result)):
-        await bot.send_message(chat_id=topic.telegram_id, text=chunk, parse_mode="Markdown")
-    await store.stamp_synthesis(topic.id)
-    logger.info("synthesis sent for topic {}", topic.id)
-
-
 # ---------------------------------------------------------------------------
-# Public runners
+# Public runner
 # ---------------------------------------------------------------------------
 
 
@@ -287,39 +211,3 @@ async def run_due_digests(bot: Bot, *, force: bool = False) -> int:
         except Exception:  # noqa: BLE001
             logger.exception("digest failed for topic {} ({!r})", topic.id, topic.name)
     return sent
-
-
-async def run_due_syntheses(bot: Bot, *, force: bool = False) -> int:
-    """Run weekly synthesis for every topic that is due."""
-    sent = 0
-    for topic in await store.get_all_active_topics():
-        now_local = datetime.now(ZoneInfo(topic.timezone))
-        if not force and not _is_synthesis_due(topic, now_local):
-            continue
-        try:
-            await _run_synthesis(topic, bot)
-            sent += 1
-        except Exception:  # noqa: BLE001
-            logger.exception("synthesis failed for topic {} ({!r})", topic.id, topic.name)
-    return sent
-
-
-# ---------------------------------------------------------------------------
-# Synthesis formatting
-# ---------------------------------------------------------------------------
-
-
-def _format_synthesis(s: SynthesisOutput) -> str:
-    parts: list[str] = ["📊 *Weekly Synthesis*\n"]
-    if s.contested_facts:
-        parts.append("*Contested this week:*")
-        parts.extend(f"• {f}" for f in s.contested_facts)
-    if s.confirmed_facts:
-        parts.append("\n*What solidified:*")
-        parts.extend(f"• {f}" for f in s.confirmed_facts)
-    parts.append(f"\n*How the story shifted:*\n{s.narrative_drift}")
-    if s.source_patterns:
-        parts.append("\n*Source patterns:*")
-        parts.extend(f"• {p}" for p in s.source_patterns)
-    parts.append(f"\n*In sum:* {s.summary}")
-    return "\n".join(parts)

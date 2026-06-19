@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from disputatio.jobs import _is_synthesis_due, is_due
+from disputatio.jobs import is_due
 from disputatio.models import Topic
 
 
@@ -22,7 +22,6 @@ def _topic(
     schedule_days: str = "",
     paused: bool = False,
     last_sent_at: datetime | None = None,
-    last_synthesis_at: datetime | None = None,
     timezone: str = "UTC",
 ) -> Topic:
     return Topic(
@@ -44,7 +43,6 @@ def _topic(
         source_guidance=None,
         created_at=datetime.now(UTC),
         last_sent_at=last_sent_at,
-        last_synthesis_at=last_synthesis_at,
     )
 
 
@@ -183,31 +181,3 @@ def test_biweekly_not_due_after_7_days() -> None:
     sent = _now(8, day=1)
     topic = _topic(frequency="biweekly", send_hour=8, send_dow=0, last_sent_at=sent)
     assert is_due(topic, _now(8, day=8)) is False  # only 7 days, needs 14
-
-
-# ---------------------------------------------------------------------------
-# _is_synthesis_due
-# ---------------------------------------------------------------------------
-
-
-def test_synthesis_not_due_if_never_synthesised() -> None:
-    topic = _topic(send_hour=8, last_synthesis_at=None)
-    assert _is_synthesis_due(topic, _now(8)) is False
-
-
-def test_synthesis_due_after_7_days() -> None:
-    sent = _now(8, day=1)
-    topic = _topic(send_hour=8, last_synthesis_at=sent)
-    assert _is_synthesis_due(topic, _now(8, day=8)) is True
-
-
-def test_synthesis_not_due_after_6_days() -> None:
-    sent = _now(8, day=1)
-    topic = _topic(send_hour=8, last_synthesis_at=sent)
-    assert _is_synthesis_due(topic, _now(8, day=7)) is False
-
-
-def test_synthesis_not_due_wrong_hour() -> None:
-    sent = _now(8, day=1)
-    topic = _topic(send_hour=8, last_synthesis_at=sent)
-    assert _is_synthesis_due(topic, _now(9, day=8)) is False

@@ -49,7 +49,7 @@ _LOOKBACK: dict[str, str] = {
 # forwarded by OpenRouter than the date-based filter.
 _RECENCY_FILTER: dict[str, str] = {
     "twice_daily": "day",
-    "daily": "day",       # "day" is 24h; prompt+date filter cover the 24-48h gap
+    "daily": "day",  # "day" is 24h; prompt+date filter cover the 24-48h gap
     "weekdays": "day",
     "mwf": "week",
     "tuth": "week",
@@ -221,8 +221,9 @@ async def _query_source(
         logger.exception("_research() call failed for source {!r}", source)
         return []
     articles = _parse(result, default_source=source)
-    logger.debug("source {!r} → {} articles: {}", source, len(articles),
-                 [a.headline[:60] for a in articles])
+    logger.debug(
+        "source {!r} → {} articles: {}", source, len(articles), [a.headline[:60] for a in articles]
+    )
     return articles
 
 
@@ -298,8 +299,9 @@ async def _query_general(
         logger.exception("_research() general call failed for topic {!r}", topic_name)
         return []
     articles = _parse(result, default_source="general", block_domains=_BLOCKED_GENERAL_DOMAINS)
-    logger.debug("general query → {} articles: {}", len(articles),
-                 [a.headline[:60] for a in articles])
+    logger.debug(
+        "general query → {} articles: {}", len(articles), [a.headline[:60] for a in articles]
+    )
     return articles
 
 

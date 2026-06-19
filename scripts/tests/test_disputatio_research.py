@@ -39,9 +39,9 @@ def _topic(**kwargs: object) -> Topic:
         excluded_sources=[],
         trusted_sources=[],
         feedback_notes=None,
+        source_guidance=None,
         created_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
         last_sent_at=None,
-        last_synthesis_at=None,
     )
     defaults.update(kwargs)
     return Topic.model_validate(defaults)

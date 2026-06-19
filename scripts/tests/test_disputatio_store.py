@@ -118,30 +118,3 @@ async def test_seen_and_dedup() -> None:
     # similarity against a very different embedding — should be low
     sim2 = await store.max_similarity(topic.id, [0.0] * 512 + [1.0] * 512, since_days=7)
     assert sim2 < 0.9
-
-
-@pytest.mark.integration
-async def test_digest_and_feedback() -> None:
-    await store.get_or_create_user(TEST_USER_ID, "Test", None)
-    topic = await store.create_topic(
-        TEST_USER_ID,
-        name="Tech news",
-        sources=["Wired"],
-        frequency="daily",
-    )
-
-    digest_id = await store.record_digest(topic.id, TEST_USER_ID, "Today in tech: ...")
-    assert digest_id is not None
-
-    digests = await store.get_recent_digests(topic.id, days=7)
-    assert len(digests) == 1
-    assert digests[0].content == "Today in tech: ..."
-
-    await store.save_feedback(TEST_USER_ID, topic.id, digest_id, "too_long", None)
-    await store.append_feedback_note(topic.id, "User prefers bullet points")
-    await store.append_feedback_note(topic.id, "Exclude Wired")
-
-    refreshed = await store.get_topic(TEST_USER_ID, topic.id)
-    assert refreshed is not None
-    assert "bullet points" in (refreshed.feedback_notes or "")
-    assert "Exclude Wired" in (refreshed.feedback_notes or "")

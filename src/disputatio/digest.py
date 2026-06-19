@@ -74,14 +74,14 @@ def _system_prompt(ctx: RunContext[_Deps]) -> str:
         "[One sentence: the key fact. What, who, where.]\n"
         '• <a href="URL"><i>Source A</i></a> — [what they specifically said/claimed]\n'
         '• <a href="URL"><i>Source B</i></a> — [their framing] 🚩 <i>state framing</i>\n'
-        "⚡ Source A: \"exact claim\"  ← include only if contradictions are listed for this story\n"
-        "   Source B: \"conflicting claim\"\n"
+        '⚡ Source A: "exact claim"  ← include only if contradictions are listed for this story\n'
+        '   Source B: "conflicting claim"\n'
         "[blank line between stories]\n\n"
         "Signals — add inline, sparingly, only when the language clearly warrants it:\n"
         "  🚩 <i>state framing</i>  — loaded or official propaganda language\n\n"
         "Contradictions — include after the source bullets, only if listed for that story:\n"
-        "  ⚡ Source A: \"exact claim\"\n"
-        "     Source B: \"conflicting claim\"\n"
+        '  ⚡ Source A: "exact claim"\n'
+        '     Source B: "conflicting claim"\n'
         "  Use the exact claims as given. Do not rephrase.\n\n"
         "RULES:\n"
         "1. Headlines MUST be sentence case: lowercase except the first word and proper nouns.\n"
