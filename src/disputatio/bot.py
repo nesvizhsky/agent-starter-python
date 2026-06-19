@@ -199,13 +199,18 @@ async def _ensure_ui(lang: str) -> None:
     )
     try:
         result = await agent.run(json.dumps(_UI, ensure_ascii=False))
-        translated = json.loads(result.output)
+        raw = result.output.strip()
+        # LLMs sometimes wrap JSON in code fences despite instructions
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        translated = json.loads(raw)
         _ui_cache[lang] = {k: str(v) for k, v in translated.items() if isinstance(v, str)}
         # Fill any missing keys with English fallback
         for k, v in _UI.items():
             _ui_cache[lang].setdefault(k, v)
-    except Exception:
-        logger.warning("UI translation failed for {} — falling back to English", lang)
+        logger.info("UI translated to {} ({} keys)", lang, len(_ui_cache[lang]))
+    except Exception as exc:
+        logger.warning("UI translation failed for {} ({}), falling back to English", lang, exc)
         _ui_cache[lang] = _UI
 
 
