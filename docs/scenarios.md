@@ -16,11 +16,6 @@ User sends `/add_topic`. Bot asks:
 
 **Next morning digest:**
 
-Bot sends: *[avatar image of Socrates — white marble bust, slightly cracked, dramatic lighting]*
-
-> 🏛️ **SOCRATES has entered the agora**
-> *"I know that I know nothing — but let us examine what these four sources claim to know."*
-
 > Three things happened yesterday that our witnesses describe... quite differently.
 >
 > **Story: Kherson shelling — 4 perspectives**
@@ -54,17 +49,7 @@ No padding. No invented context.
 
 ---
 
-## S3 — User asks for a deep dive
-
-After receiving a digest, user replies: *"Tell me more about the TASS framing"*
-
-Bot responds with a deeper analysis: the specific rhetorical techniques used, historical
-context for why TASS uses this language, examples of similar framing in past conflicts.
-Persona stays on (Socrates asking probing questions about the language).
-
----
-
-## S4 — User adds a custom source mid-topic
+## S3 — User adds a custom source mid-topic
 
 User: `/add_source "War in Ukraine" https://kyivindependent.com`
 
@@ -74,7 +59,7 @@ Next digest includes it automatically.
 
 ---
 
-## S5 — User excludes a source
+## S4 — User excludes a source
 
 After a digest, user: *"Exclude TASS — it's too obviously propaganda to be useful"*
 
@@ -84,19 +69,17 @@ TASS never appears in that user's Ukraine digests again.
 
 ---
 
-## S6 — Light topic: archaeology, weekly
+## S5 — Light topic: archaeology, weekly
 
 **Setup:** "Archaeology news", weekly, sources: "Archaeology Magazine, LiveScience, ScienceDaily"
 
-**Weekly digest (Shakespeare persona, randomly assigned):**
+**Weekly digest:**
 
-> *"What light through yonder trowel breaks? Three stories from the earth this week:"*
->
 > 1. 3,000-year-old Egyptian bakery found in Luxor (Archaeology Mag)
 > 2. New Neanderthal DNA study revises interbreeding timeline (LiveScience)
 > 3. Intact Roman road uncovered in London Crossrail extension (ScienceDaily)
 >
-> **[Grumpy media scholar]**
+> **[Propaganda signals]**
 > ScienceDaily: press-release sourcing, no independent verification. Archaeology Mag: solid.
 > LiveScience: hedged appropriately. *Low manipulation signals overall — these sources want
 > grants, not votes. Different incentives, different spin.*

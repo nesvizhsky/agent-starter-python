@@ -13,7 +13,6 @@ import pytest
 
 from disputatio.digest import DigestOutput, _format_prompt, generate
 from disputatio.models import SourceView, Story
-from disputatio.personas import PERSONAS, pick
 
 
 def _story(headline: str, *views: tuple[str, str, str, list[str]]) -> Story:
@@ -104,8 +103,7 @@ async def test_generate_returns_valid_structure() -> None:
             ),
         ),
     ]
-    persona = pick(pinned="socrates")
-    result = await generate(stories, persona)
+    result = await generate(stories)
 
     assert isinstance(result, DigestOutput)
     assert result.main.strip()
@@ -114,31 +112,9 @@ async def test_generate_returns_valid_structure() -> None:
 
 
 @pytest.mark.integration
-async def test_generate_persona_voice_is_distinct() -> None:
-    """Socrates and T-800 covering the same story should produce clearly different text."""
-    stories = [
-        _story(
-            "Election results announced",
-            ("Reuters", "https://r.com/a", "The incumbent won with 54% of the vote.", []),
-        ),
-    ]
-
-    socrates_result = await generate(stories, pick(pinned="socrates"))
-    terminator_result = await generate(stories, pick(pinned="terminator"))
-
-    # Both should produce non-empty main text
-    assert socrates_result.main.strip()
-    assert terminator_result.main.strip()
-
-    # They should differ — Socrates asks questions, T-800 is cold/tactical
-    assert socrates_result.main != terminator_result.main
-
-
-@pytest.mark.integration
-async def test_generate_empty_stories_returns_in_character_message() -> None:
-    """No stories → short in-character 'nothing new today' message."""
-    persona = pick(pinned="monk")
-    result = await generate([], persona)
+async def test_generate_empty_stories_returns_short_message() -> None:
+    """No stories → short 'nothing new today' message."""
+    result = await generate([])
 
     assert result.main.strip()
     word_count = len(result.main.split())
@@ -154,24 +130,23 @@ async def test_generate_respects_feedback_notes() -> None:
             ("NASA", "https://nasa.gov/a", "Artemis telescope launched successfully.", []),
         ),
     ]
-    persona = pick(pinned="alien")
     notes = "User prefers very short digests. No more than 3 sentences per story."
 
-    result = await generate(stories, persona, feedback_notes=notes)
+    result = await generate(stories, feedback_notes=notes)
     assert result.main.strip()
-    # With the note, output should be fairly concise (hard to guarantee exactly, but sanity check)
     assert len(result.main.split()) <= 600
 
 
 @pytest.mark.integration
-async def test_generate_all_personas_produce_output() -> None:
-    """Smoke test: every persona can generate without error."""
+async def test_generate_in_russian() -> None:
+    """Digest should be written in the requested language."""
     stories = [
         _story(
             "Volcano erupts in Iceland",
             ("BBC", "https://bbc.com/v", "A volcano erupted on Reykjanes Peninsula.", []),
         ),
     ]
-    for persona in PERSONAS:
-        result = await generate(stories, persona)
-        assert result.main.strip(), f"Persona {persona.key!r} returned empty main"
+    result = await generate(stories, language="Russian")
+    assert result.main.strip()
+    # Rough check: Cyrillic characters should appear
+    assert any("Ѐ" <= c <= "ӿ" for c in result.main), "Expected Cyrillic in Russian output"

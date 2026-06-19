@@ -38,7 +38,6 @@ def _topic(**kwargs: object) -> Topic:
         sources=["BBC", "Reuters"],
         excluded_sources=[],
         trusted_sources=[],
-        pinned_persona=None,
         feedback_notes=None,
         created_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
         last_sent_at=None,

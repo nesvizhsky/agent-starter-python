@@ -130,12 +130,12 @@ async def test_digest_and_feedback() -> None:
         frequency="daily",
     )
 
-    digest_id = await store.record_digest(topic.id, TEST_USER_ID, "Today in tech: ...", "Socrates")
+    digest_id = await store.record_digest(topic.id, TEST_USER_ID, "Today in tech: ...")
     assert digest_id is not None
 
     digests = await store.get_recent_digests(topic.id, days=7)
     assert len(digests) == 1
-    assert digests[0].persona == "Socrates"
+    assert digests[0].content == "Today in tech: ..."
 
     await store.save_feedback(TEST_USER_ID, topic.id, digest_id, "too_long", None)
     await store.append_feedback_note(topic.id, "User prefers bullet points")

@@ -30,9 +30,7 @@ The bot consistently flags one side's sources harder than the other's, importing
 Mitigation: the propaganda module is given identical criteria for all sources and is explicitly
 instructed to apply them symmetrically. The output always names the source being analyzed and
 shows the specific signals found, so the user can evaluate the analysis itself.
-The fun-persona framing ("the grumpy media scholar notes…") signals that this is interpretation,
-not verdict. **The bot must never conclude "this source is propaganda" — only "here are the
-signals I found."**
+**The bot must never conclude "this source is propaganda" — only "here are the signals I found."**
 
 ### F5 — Source is paywalled or unavailable
 A tracked URL returns a paywall, 404, or rate-limit.
@@ -41,13 +39,7 @@ cycles, notify the user: *"I've been unable to reach [source] for 3 updates — 
 
 ## UX failures
 
-### F6 — Persona swamps the content
-The creative delivery is so heavy that the actual information is buried.
-Mitigation: persona is applied to the *framing and transitions*, not to the facts themselves.
-Quotes and source attributions are always presented straight. The persona is the narrator's
-voice, not a rewrite of the news.
-
-### F7 — Digest is too long to read in Telegram
+### F6 — Digest is too long to read in Telegram
 A hot topic produces a wall of text.
 Mitigation: each digest has a hard cap per topic. If there's more to say, the bot ends with
 *"There's more — reply /more for the full picture."* This is the default shape; the user

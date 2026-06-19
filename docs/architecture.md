@@ -24,8 +24,7 @@ src/
     ├── dedup.py          # freshness filter: URL match + semantic similarity
     ├── perspectives.py   # cluster articles into stories (one event, N source views)
     ├── propaganda.py     # rhetoric analysis agent — signals, never verdicts
-    ├── personas.py       # persona definitions, avatar R2 keys, selection
-    ├── digest.py         # pydantic-ai agent: write digest in persona voice
+    ├── digest.py         # pydantic-ai agent: write the digest
     ├── synthesis.py      # weekly synthesis agent
     ├── bot.py            # python-telegram-bot Application + all handlers
     ├── jobs.py           # run_due_digests(), run_due_syntheses()
@@ -135,16 +134,12 @@ jobs.run_due_digests(bot)
                    # model: build_model("balanced")
                    # identical criteria applied to all sources
 
-       persona   = personas.pick(topic)
-                   # random, or topic.pinned_persona if set
-                   # returns Persona(name, avatar_key, intro, voice_instructions)
-
-       text      = await digest.generate(stories, persona, topic.feedback_notes)
+       text      = await digest.generate(stories, topic.feedback_notes, language)
                    # pydantic-ai agent, model: build_model("balanced")
                    # returns DigestOutput(main: str, overflow: str | None)
                    # main ≤ 800 words; overflow stored for /more
 
-       → send: avatar photo (R2) + intro card + main text + feedback buttons
+       → send: main text + topic card + feedback buttons
        → store.record_digest(...)
        → store.record_seen(topic.id, fresh)    # saves URLs + embeddings
        → store.stamp_sent(topic.id)
@@ -194,16 +189,10 @@ System prompt: apply the same checklist to every source (one-sided framing, load
 vocabulary, dehumanizing language, false equivalences, appeal to common sense, omission
 of facts present in other sources). Report signals found, never a verdict.
 
-### `personas.py`
-All 16 personas defined as data in a list of `Persona` dataclasses. `pick()` draws
-randomly (or returns pinned). Avatar images live in R2 at `disputatio/personas/<name>.png`,
-pre-generated once by `scripts/generate_personas.py` using `media.text_to_image()`.
-
 ### `digest.py`
-pydantic-ai agent that writes the full digest. Receives stories + persona voice
-instructions + user feedback notes (all go into the system prompt). Returns
-`DigestOutput(main, overflow)`. The agent is instructed to keep `main` under 800 words
-and dump the rest into `overflow`.
+pydantic-ai agent that writes the full digest. Receives stories + feedback notes + language
+(all go into the system prompt). Returns `DigestOutput(main, overflow)`. The agent is
+instructed to keep `main` under 800 words and dump the rest into `overflow`.
 
 ### `synthesis.py`
 Runs weekly. Fetches `store.get_recent_digests(topic_id, days=7)`, passes them to a
@@ -222,7 +211,7 @@ update_topic(topic_id, **fields) -> None
 get_seen_urls(topic_id) -> set[str]
 get_seen_embeddings(topic_id, since_days: int) -> list[list[float]]
 record_seen(topic_id, articles: list[Article]) -> None
-record_digest(topic_id, telegram_id, content, persona) -> UUID
+record_digest(topic_id, telegram_id, content) -> UUID
 get_recent_digests(topic_id, days: int) -> list[Digest]
 stamp_sent(topic_id) -> None
 save_feedback(telegram_id, topic_id, digest_id, signal, note) -> None
@@ -276,9 +265,6 @@ FastAPI. Lifespan: init PTB + apply migrations + register webhook (if `PUBLIC_UR
 | `llm.build_model("fast")` | Event clustering, intent dispatcher |
 | `llm.build_model("balanced")` | Propaganda analysis, digest generation |
 | `llm.build_model("smart")` | Weekly synthesis only |
-| `media.text_to_image()` | Persona avatar generation (one-shot setup script) |
-| `storage.store_file()` | Save persona avatars to R2 |
-| `storage.public_url()` | Serve persona avatars in Telegram |
 | `db.apply_migrations()` | On startup |
 
 ## Entrypoints (pyproject.toml)
@@ -300,8 +286,7 @@ Each module can be built and tested in isolation before the next depends on it:
 4.  dedup.py                  → URL filter + embedding similarity
 5.  perspectives.py           → event clustering on sample articles
 6.  propaganda.py             → signal extraction on known-biased text
-7.  personas.py               → selection logic + R2 avatar keys
-8.  digest.py                 → full digest generation end-to-end
-9.  synthesis.py              → synthesis from synthetic digest history
+7.  digest.py                 → full digest generation end-to-end
+8.  synthesis.py              → synthesis from synthetic digest history
 10. bot.py + jobs.py + app.py → full pipeline: cron tick → Telegram message
 ```

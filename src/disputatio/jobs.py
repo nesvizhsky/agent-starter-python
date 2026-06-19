@@ -137,7 +137,6 @@ def _feedback_keyboard(digest_id: UUID) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton("📚 Too shallow", callback_data=f"fb:too_shallow:{d}"),
                 InlineKeyboardButton("📖 Too long", callback_data=f"fb:too_long:{d}"),
-                InlineKeyboardButton("🎭 Wrong voice", callback_data=f"fb:wrong_persona:{d}"),
             ],
         ]
     )
