@@ -57,7 +57,7 @@ _AT_SOURCES = 6  # /add_topic only: enter sources
 _SC_PICK = 7  # /schedule: topic picker
 
 
-async def _safe_answer(query: CallbackQuery) -> None:
+async def _safe_answer(query: CallbackQuery, text: str = "", show_alert: bool = False) -> None:
     """Acknowledge a callback query, tolerating an expired/invalid query id.
 
     Telegram invalidates callback queries a few seconds after they're sent. If the
@@ -66,7 +66,7 @@ async def _safe_answer(query: CallbackQuery) -> None:
     never abort the handler.
     """
     with contextlib.suppress(BadRequest):
-        await query.answer()
+        await query.answer(text, show_alert=show_alert)
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +119,6 @@ _UI: dict[str, str] = {
     # Messages
     "fetch_status": "⏳ *Fetching digest for {name}…*\n_This takes 1–2 minutes. Other commands won't respond until it's done._",  # noqa: E501
     "fetch_card": "⏳ _Fetching digest…_",
-    "fetch_short": "Running digest for *{name}*…",
     "err_generic": "Something went wrong — try again.",
     "err_moment": "Something went wrong — try again in a moment.",
     "no_topics": "You have no topics yet. Use /add\\_topic to create one.",
@@ -315,6 +314,7 @@ async def _start_add_topic_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     if query is None or query.from_user is None:
         return ConversationHandler.END
     await _safe_answer(query)
+    _reset_topic_flow_state(context)
     if context.user_data is not None:
         context.user_data["sched_mode"] = "create"
     await query.message.reply_text(  # type: ignore[union-attr]
@@ -356,6 +356,7 @@ async def on_start_nav(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_add_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None or not await _allowed(update):
         return ConversationHandler.END
+    _reset_topic_flow_state(context)
     if context.user_data is not None:
         context.user_data["sched_mode"] = "create"
     await update.message.reply_text(
@@ -448,6 +449,7 @@ async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if tg is None:
         return ConversationHandler.END
 
+    _reset_topic_flow_state(context)
     if context.user_data is not None:
         context.user_data["sched_mode"] = "update"
 
@@ -598,7 +600,7 @@ async def _done_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return _ASK_SCHED_DAYS
     selected: set[int] = context.user_data.get("selected_days", set())
     if not selected:
-        await query.answer("Pick at least one day.", show_alert=True)
+        await _safe_answer(query, "Pick at least one day.", show_alert=True)
         return _ASK_SCHED_DAYS
     await _safe_answer(query)
     days_str = ",".join(str(d) for d in sorted(selected))
@@ -824,23 +826,44 @@ async def _create_topic(
     return ConversationHandler.END
 
 
-async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+_TOPIC_FLOW_KEYS = (
+    "new_topic_name",
+    "new_topic_desc",
+    "new_topic_source_guidance",
+    "new_topic_sides_json",
+    "new_topic_freq",
+    "new_topic_hour",
+    "new_topic_minute",
+    "new_topic_dow",
+    "new_topic_tz",
+    "new_topic_schedule_days",
+    "sched_mode",
+    "sched_topic_id",
+    "sched_days_mode",
+    "selected_days",
+)
+
+
+def _reset_topic_flow_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clear any half-finished add_topic/schedule state before (re)starting the flow."""
     if context.user_data is not None:
-        for key in (
-            "new_topic_name",
-            "new_topic_desc",
-            "new_topic_freq",
-            "new_topic_hour",
-            "new_topic_minute",
-            "new_topic_dow",
-            "new_topic_tz",
-            "new_topic_schedule_days",
-            "sched_mode",
-            "sched_topic_id",
-            "sched_days_mode",
-            "selected_days",
-        ):
+        for key in _TOPIC_FLOW_KEYS:
             context.user_data.pop(key, None)
+
+
+async def _conversation_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Fires when a user abandons add_topic/schedule mid-flow without finishing or /cancel."""
+    _reset_topic_flow_state(context)
+    chat = update.effective_chat
+    if chat is not None:
+        await context.bot.send_message(
+            chat.id, "Timed out waiting for a reply. Send /add\\_topic to start again."
+        )
+    return ConversationHandler.END
+
+
+async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    _reset_topic_flow_state(context)
     if update.message:
         tg_c = update.effective_user
         ul_c = await _lang(tg_c.id) if tg_c else "English"
@@ -937,7 +960,7 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if action == "check":
         await query.edit_message_text(
-            _t(ul, "fetch_short", name=_short(topic.shown_name)), parse_mode="Markdown"
+            _t(ul, "fetch_status", name=topic.shown_name), parse_mode="Markdown"
         )
         try:
             await jobs._run_digest(topic, context.bot)
@@ -1103,7 +1126,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     _, action, topic_id_str = parts
 
-    await query.answer("Running digest…" if action == "check" else "")
+    await _safe_answer(query, "Running digest…" if action == "check" else "")
 
     from uuid import UUID
 
@@ -1550,7 +1573,7 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
         return
     await update.message.chat.send_action(ChatAction.TYPING)
-    fetch_msg = _t(ul, "fetch_short", name=_short(topic.shown_name))
+    fetch_msg = _t(ul, "fetch_status", name=topic.shown_name)
     await update.message.reply_text(fetch_msg, parse_mode="Markdown")
     try:
         await jobs._run_digest(topic, context.bot)
@@ -1957,8 +1980,18 @@ def build_application() -> Application:  # type: ignore[type-arg]
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _got_sources_text),
                 CallbackQueryHandler(_got_sources_skip, pattern=r"^sources:skip"),
             ],
+            ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, _conversation_timeout)],
         },
-        fallbacks=[CommandHandler("cancel", _cancel)],
+        fallbacks=[
+            CommandHandler("cancel", _cancel),
+            # Re-entering while already mid-flow (e.g. user abandoned a previous attempt and
+            # clicks "Add topic" again) restarts cleanly instead of being silently dropped —
+            # these entry points only match new conversations otherwise.
+            CommandHandler("add_topic", cmd_add_topic),
+            CommandHandler("schedule", cmd_schedule),
+            CallbackQueryHandler(_start_add_topic_cb, pattern=r"^start:add_topic$"),
+        ],
+        conversation_timeout=600,  # 10 min — abandoned flows clean up instead of staying stuck
         per_message=False,
     )
 
