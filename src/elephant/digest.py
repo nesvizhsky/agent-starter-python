@@ -125,8 +125,12 @@ async def generate(
 # ---------------------------------------------------------------------------
 
 _NO_NEWS_PROMPT = (
-    "There is nothing significantly new to report today. "
-    "Write a brief factual message letting the reader know."
+    "No article in this check qualified as a specific, reportable news event for this topic. "
+    "Write ONE short sentence telling the reader there's nothing new to report.\n\n"
+    "You have NO information about what was searched, why nothing qualified, what sources "
+    "were checked, or what time period was covered beyond 'this check' — do not invent or "
+    "guess at any of that. Do not mention dates, months, source names, source types "
+    "(e.g. 'aggregators'), or reasons. Just state plainly that there's nothing new."
 )
 
 

@@ -113,12 +113,35 @@ async def test_generate_returns_valid_structure() -> None:
 
 @pytest.mark.integration
 async def test_generate_empty_stories_returns_short_message() -> None:
-    """No stories → short 'nothing new today' message."""
+    """No stories → short 'nothing new today' message with no invented specifics.
+
+    The LLM has zero information about what was searched, so it must not
+    fabricate dates, months, or source types/names — that's a hallucination,
+    not a digest.
+    """
     result = await generate([])
 
     assert result.main.strip()
     word_count = len(result.main.split())
     assert word_count <= 200, f"No-news message should be short, got {word_count} words"
+
+    lowered = result.main.lower()
+    months = (
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    )
+    for forbidden in ("aggregator", *months):
+        assert forbidden not in lowered, f"hallucinated detail {forbidden!r} in {result.main!r}"
 
 
 @pytest.mark.integration

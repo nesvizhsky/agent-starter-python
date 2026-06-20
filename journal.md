@@ -335,3 +335,23 @@ shapes the regex won't generalize to. Verified live: re-ran the full pipeline fo
 the same topic — regex caught the common shapes, and the LLM correctly discarded
 the rest (newsletter front pages, an author-bio page) without fabricating stories,
 producing only the 2 real findings that were actually new.
+
+## 2026-06-21 00:50 — Fixed the no-news fallback hallucinating specifics
+User report: "AI" topic said "no confirmed events for June" and listed
+aggregators, when neither of those was ever told to it. Traced it to
+digest.py's _NO_NEWS_PROMPT — when clustering correctly finds zero real events
+(not a bug; the strengthened Stonehenge-fix prompt was working as intended),
+the digest LLM call got "there is nothing new, write a brief message" with
+*zero* actual context — no article list, no dates, no sources. With nothing
+to ground it, the model filled in plausible-sounding specifics it was never
+given. Classic hallucination: confident, fluent, and fabricated, with no
+signal to the reader that it's a guess. Per docs/failure_modes.md's rule
+("a confident wrong answer is worse than 'I'm not sure'"), this needed a
+hard fix, not a shrug.
+
+Fix: rewrote the prompt to explicitly say the model has no information about
+what was searched, why nothing qualified, or what time period was covered —
+and forbid mentioning dates, months, source names/types. Verified across
+three live calls: all came back flat and accurate ("No new reportable events
+were found..."), no invented specifics. Added a regression test asserting
+month names and "aggregator" never appear in the no-news output.
