@@ -14,8 +14,16 @@ import contextlib
 
 from loguru import logger
 from pydantic_ai import Agent
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
+from telegram import (
+    BotCommand,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+)
 from telegram.constants import ChatAction
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -45,6 +53,19 @@ _ASK_TIME = 4  # both: type a time
 _ASK_TZ = 5  # /add_topic only: pick timezone
 _AT_SOURCES = 6  # /add_topic only: enter sources
 _SC_PICK = 7  # /schedule: topic picker
+
+
+async def _safe_answer(query: CallbackQuery) -> None:
+    """Acknowledge a callback query, tolerating an expired/invalid query id.
+
+    Telegram invalidates callback queries a few seconds after they're sent. If the
+    bot was busy (e.g. running a digest pipeline) when a click arrived, answering it
+    can fail — but the button's actual action should still run, so this failure must
+    never abort the handler.
+    """
+    with contextlib.suppress(BadRequest):
+        await query.answer()
+
 
 # ---------------------------------------------------------------------------
 # Name-generation agent (fast + cheap — just makes a 2-4 word label)
@@ -291,7 +312,7 @@ async def _start_add_topic_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     if query is None or query.from_user is None:
         return ConversationHandler.END
-    await query.answer()
+    await _safe_answer(query)
     if context.user_data is not None:
         context.user_data["sched_mode"] = "create"
     await query.message.reply_text(  # type: ignore[union-attr]
@@ -305,7 +326,7 @@ async def on_start_nav(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if query is None or query.from_user is None or query.data is None:
         return
-    await query.answer()
+    await _safe_answer(query)
     action = query.data.split(":", 1)[1]
     tg_id = query.from_user.id
 
@@ -385,7 +406,7 @@ async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def _name_confirmed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query:
-        await query.answer()
+        await _safe_answer(query)
         name = context.user_data.get("new_topic_name", "") if context.user_data else ""
         await query.edit_message_text(f"✓ *{name}*", parse_mode="Markdown")
     return await _ask_sched_type(update, context)
@@ -394,7 +415,7 @@ async def _name_confirmed(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def _name_rename_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query:
-        await query.answer()
+        await _safe_answer(query)
         await query.edit_message_text("Type a short label for this topic:")
     return _AT_NAME_CONFIRM
 
@@ -455,7 +476,7 @@ async def _sc_got_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     query = update.callback_query
     if query is None or query.data is None or context.user_data is None:
         return _SC_PICK
-    await query.answer()
+    await _safe_answer(query)
     topic_id_str = query.data.split(":", 1)[1]
     context.user_data["sched_topic_id"] = topic_id_str
     await query.edit_message_text("Changing schedule…")
@@ -496,7 +517,7 @@ async def _got_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     if query is None or query.data is None or context.user_data is None:
         return _ASK_SCHED_TYPE
-    await query.answer()
+    await _safe_answer(query)
     freq = query.data.split(":", 1)[1]
     context.user_data["new_topic_freq"] = freq
     await query.edit_message_text(f"✓ {_SCHED_TYPE_LABELS.get(freq, freq)}")
@@ -553,7 +574,7 @@ async def _toggle_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     query = update.callback_query
     if query is None or query.data is None or context.user_data is None:
         return _ASK_SCHED_DAYS
-    await query.answer()
+    await _safe_answer(query)
     day_idx = int(query.data.split(":", 1)[1])
     selected: set[int] = context.user_data.get("selected_days", set())
     if day_idx in selected:
@@ -574,7 +595,7 @@ async def _done_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not selected:
         await query.answer("Pick at least one day.", show_alert=True)
         return _ASK_SCHED_DAYS
-    await query.answer()
+    await _safe_answer(query)
     days_str = ",".join(str(d) for d in sorted(selected))
     context.user_data["new_topic_schedule_days"] = days_str
     day_names = " / ".join(_DOW_SHORT[d] for d in sorted(selected))
@@ -587,7 +608,7 @@ async def _got_single_day(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     if query is None or query.data is None or context.user_data is None:
         return _ASK_SCHED_DAYS
-    await query.answer()
+    await _safe_answer(query)
     dow = int(query.data.split(":", 1)[1])
     context.user_data["new_topic_dow"] = dow
     await query.edit_message_text(f"✓ {_DOW_LABELS[dow]}")
@@ -709,7 +730,7 @@ async def _got_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query is None or context.user_data is None:
         return _ASK_TZ
-    await query.answer()
+    await _safe_answer(query)
     tz = query.data.split(":", 1)[1] if query.data else "UTC"
     context.user_data["new_topic_tz"] = tz
     label = next((lbl for lbl, z in _TIMEZONES if z == tz), tz)
@@ -743,7 +764,7 @@ async def _got_sources_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def _got_sources_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query:
-        await query.answer()
+        await _safe_answer(query)
         await query.edit_message_text("No specific sources — I'll cast a wide net.")
     return await _create_topic(update, context, [])
 
@@ -892,7 +913,7 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     if query is None or query.from_user is None or query.data is None:
         return
-    await query.answer()
+    await _safe_answer(query)
 
     parts = query.data.split(":", 2)
     if len(parts) != 3:
@@ -973,7 +994,7 @@ async def on_topic_delete_confirm(update: Update, _ctx: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     if query is None or query.from_user is None or query.data is None:
         return
-    await query.answer()
+    await _safe_answer(query)
 
     parts = query.data.split(":", 2)
     if len(parts) != 3:
@@ -1001,7 +1022,7 @@ async def on_tz_set(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if query is None or query.from_user is None or query.data is None:
         return
-    await query.answer()
+    await _safe_answer(query)
 
     parts = query.data.split(":", 2)
     if len(parts) != 3:
@@ -1071,7 +1092,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     parts = query.data.split(":", 2)
     if len(parts) != 3:
-        await query.answer()
+        await _safe_answer(query)
         return
     _, action, topic_id_str = parts
 
@@ -1472,7 +1493,7 @@ async def _cb_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     query = update.callback_query
     if query is None or query.data is None:
         return
-    await query.answer()
+    await _safe_answer(query)
     tg = update.effective_user
     if tg is None:
         return
