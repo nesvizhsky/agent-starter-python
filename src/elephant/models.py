@@ -6,6 +6,7 @@ Article is the research pipeline's unit; everything else maps to a DB table.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from uuid import UUID
 
@@ -17,6 +18,14 @@ class User(BaseModel):
     first_name: str
     username: str | None
     created_at: datetime
+
+
+class Side(BaseModel):
+    """One party/perspective in a topic (a state, a faction, government vs. opposition,
+    regulator vs. industry, etc.) with a few example outlets that lean toward it."""
+
+    name: str
+    outlets: list[str] = Field(default_factory=list)
 
 
 class Topic(BaseModel):
@@ -38,6 +47,7 @@ class Topic(BaseModel):
     trusted_sources: list[str]
     feedback_notes: str | None
     source_guidance: str | None
+    sides_json: str | None = None  # JSON-encoded list[Side]; use the `sides` property
     created_at: datetime
     last_sent_at: datetime | None
 
@@ -49,6 +59,16 @@ class Topic(BaseModel):
     def shown_description(self) -> str | None:
         return self.display_description or self.description
 
+    @property
+    def sides(self) -> list[Side]:
+        """Parsed sides list. Empty for topics with no identified sides, or on bad data."""
+        if not self.sides_json:
+            return []
+        try:
+            return [Side.model_validate(s) for s in json.loads(self.sides_json)]
+        except (ValueError, TypeError):
+            return []
+
 
 class Article(BaseModel):
     """One article from the research step. Not stored directly — store.py takes these."""
@@ -59,6 +79,7 @@ class Article(BaseModel):
     published_at: datetime | None
     summary: str
     context: str | None = None  # full Perplexity research answer from the query that found this
+    is_general_query: bool = False  # came from the catch-all query, not a specific outlet
 
 
 class SourceView(BaseModel):

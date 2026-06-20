@@ -32,9 +32,14 @@ It is **not** a propagandist for any side, including its own analysis.
    Each story = one event + N source perspectives on it.
 5. Propaganda module (runs on all topics, all sources):
    For each source perspective, identify signals: one-sided framing, loaded vocabulary,
-   dehumanizing language, false equivalences, appeal to "common sense".
+   dehumanizing language, false equivalences, appeal to "common sense", and omission of
+   a clearly relevant other side (given the topic's identified sides/parties, if any).
    Output: per-source signal list. Never a verdict. Applied with identical criteria
    to every source — Russian state media and Ukrainian official sources get the same lens.
+   Research itself tries to surface each identified side's own-leaning outlets (not just
+   outside commentary about them) — but when it comes up empty for a side, the digest
+   says nothing about the gap; the omission signal above is what surfaces an imbalance,
+   not a confession that search failed.
 6. Generate digest: agent writes the output in the user's chosen language.
    - Hard cap: ~800 words per digest in Telegram. Offer /more if there's overflow.
    - Structure: brief intro → stories (each with perspectives + optional propaganda note).

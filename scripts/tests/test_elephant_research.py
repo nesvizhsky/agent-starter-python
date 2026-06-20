@@ -68,10 +68,10 @@ def test_parse_uses_title_as_headline() -> None:
             Source(url="https://bbc.com/news/article-2", title=None),
         ],
     )
-    articles = _parse(result, default_source="BBC")
+    articles = _parse(result)
     assert len(articles) == 2
     assert articles[0].headline == "Ukraine ceasefire talks stall"
-    assert articles[0].source == "BBC"
+    assert articles[0].source == "bbc.com"
     assert articles[0].url == "https://bbc.com/news/article-1"
     # Falls back to URL-derived headline when title is None
     assert "Article" in articles[1].headline or articles[1].headline != ""
@@ -85,18 +85,31 @@ def test_parse_skips_empty_urls() -> None:
             Source(url="https://example.com/valid", title="Valid"),
         ],
     )
-    articles = _parse(result, default_source="test")
+    articles = _parse(result)
     assert len(articles) == 1
     assert articles[0].url == "https://example.com/valid"
 
 
-def test_parse_general_derives_source_from_url() -> None:
+def test_parse_always_derives_source_from_url() -> None:
+    """Source is always the citation's actual domain, never the outlet asked about —
+    Perplexity frequently cites unrelated domains, so trusting the query target
+    would mislabel them."""
     result = Research(
         text="prose",
         sources=[Source(url="https://www.reuters.com/world/story", title="Big story")],
     )
-    articles = _parse(result, default_source="general")
+    articles = _parse(result)
     assert articles[0].source == "reuters.com"
+    assert articles[0].is_general_query is False
+
+
+def test_parse_marks_general_query_articles() -> None:
+    result = Research(
+        text="prose",
+        sources=[Source(url="https://www.reuters.com/world/story", title="Big story")],
+    )
+    articles = _parse(result, is_general_query=True)
+    assert articles[0].is_general_query is True
 
 
 def test_gather_skips_excluded_sources() -> None:

@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from agent.services.llm import build_model
-from elephant.models import SourceView, Story  # noqa: F401  (SourceView used in type hints)
+from elephant.models import Side, SourceView, Story  # noqa: F401  (SourceView used in type hints)
 
 # ---------------------------------------------------------------------------
 # Output model (intermediate — merged back into Story.source_views)
@@ -46,7 +46,9 @@ _CHECKLIST = """\
 - Dehumanising language: referring to a group as vermin, a threat, or an abstraction
 - False equivalence: treating clearly unequal things as equivalent to appear balanced
 - Appeal to obviousness: 'everyone knows', 'it is clear that', 'obviously'
-- Passive construction hiding agency: 'buildings were destroyed' — destroyed by whom?"""
+- Passive construction hiding agency: 'buildings were destroyed' — destroyed by whom?
+- Omits a clearly relevant other side: the story involves another named party, but this
+  source's coverage doesn't engage with their position, statements, or actions at all"""
 
 _agent: Agent[None, _Output] = Agent(
     build_model("balanced"),
@@ -72,17 +74,20 @@ _agent: Agent[None, _Output] = Agent(
 # ---------------------------------------------------------------------------
 
 
-async def analyze(stories: list[Story]) -> list[Story]:
+async def analyze(stories: list[Story], sides: list[Side] | None = None) -> list[Story]:
     """Fill in signals on each SourceView across all stories.
 
     Fires one LLM call per story, concurrently. Updates and returns the
     same list — signals on each SourceView are populated in place.
     Fails open: an analysis error leaves signals empty; the story still runs.
+
+    sides: the topic's identified parties/perspectives (if any), so the omission
+    check knows which "other side" a source might be ignoring.
     """
     if not stories:
         return stories
 
-    tasks = [_analyze_story(story) for story in stories]
+    tasks = [_analyze_story(story, sides) for story in stories]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     for story, result in zip(stories, results, strict=True):
@@ -99,14 +104,23 @@ async def analyze(stories: list[Story]) -> list[Story]:
 # ---------------------------------------------------------------------------
 
 
-async def _analyze_story(story: Story) -> list[SourceSignals]:
-    prompt = _format_prompt(story)
+async def _analyze_story(story: Story, sides: list[Side] | None = None) -> list[SourceSignals]:
+    prompt = _format_prompt(story, sides)
     result = await _agent.run(prompt)
     return result.output.analyses
 
 
-def _format_prompt(story: Story) -> str:
-    lines = [
+def _format_prompt(story: Story, sides: list[Side] | None = None) -> str:
+    lines = []
+    if sides:
+        side_names = ", ".join(s.name for s in sides)
+        lines.append(
+            f"This topic involves these sides/parties: {side_names}. When checking for "
+            "omission, consider whether each source's coverage engages with the other "
+            "relevant side(s) given what this specific story is about — not every story "
+            "touches every side equally, so only flag a genuine, story-relevant omission.\n"
+        )
+    lines += [
         f"Story: {story.headline}\n",
         f"Analyse these {len(story.source_views)} source(s) for rhetorical signals:\n",
     ]

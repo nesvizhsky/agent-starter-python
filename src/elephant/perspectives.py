@@ -150,7 +150,7 @@ def _attach_contexts(stories: list[Story], articles: list[Article]) -> None:
     for a in articles:
         if not a.context:
             continue
-        if a.source == "general":
+        if a.is_general_query:
             general_ctx = a.context
         else:
             key = a.source.lower().removeprefix("www.")

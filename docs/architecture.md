@@ -148,15 +148,30 @@ jobs.run_due_digests(bot)
 ## Module responsibilities
 
 ### `research.py`
-Calls `llm.research()` for each source plus one general query:
+Calls `llm.research()` for each tracked source, each auto-identified side outlet, plus
+one general query:
 ```python
 research(f'recent news about "{topic.name}" from {source} last 48 hours')
 research(f'"{topic.name}" latest developments multiple perspectives')
 ```
-Parses the `Research.sources` list into `list[Article]`.
+Parses the `Research.sources` list into `list[Article]`. `Article.source` is always the
+citation's actual URL domain — never the outlet name we asked about — because Perplexity
+often cites unrelated domains even when asked specifically about one outlet; trusting the
+query target would mislabel them.
+
+`identify_sides(description, topic_name) -> list[Side]` identifies the distinct
+parties/perspectives in a topic (states, government vs. opposition, regulator vs.
+industry, etc.), each with a few example outlets — empty for topics with no inherent
+sides (archaeology, science). Generated once per topic (creation or description edit),
+stored as `Topic.sides_json`. `gather()` fires one focused per-outlet query for up to
+2 outlets per side (`_MAX_OUTLETS_PER_SIDE`), same mechanism as tracked sources, with the
+general-query domain blocklist applied (auto-suggested outlets weren't user-chosen, so
+they get the same quality bar).
 
 **Known limitation:** Perplexity Sonar doesn't index all sources equally — Russian state
-media and paywalled outlets may not surface reliably. Direct-URL fetching is v2 scope.
+media and paywalled outlets may not surface reliably even when a focused per-outlet query
+asks for them directly; this is genuinely probabilistic, not a guarantee. Direct-URL
+fetching (bypassing Perplexity's index for known outlets) is v2 scope.
 
 ### `dedup.py`
 Two-pass freshness filter using `store.get_seen_urls()` and `store.get_seen_embeddings()`.
@@ -187,7 +202,11 @@ class SourceSignals(BaseModel):
 ```
 System prompt: apply the same checklist to every source (one-sided framing, loaded
 vocabulary, dehumanizing language, false equivalences, appeal to common sense, omission
-of facts present in other sources). Report signals found, never a verdict.
+of a clearly relevant other side). Report signals found, never a verdict.
+
+`analyze(stories, sides=topic.sides)` passes the topic's identified sides into the prompt
+so the omission check has a concrete "other side" to check against — without it, the
+check still runs but relies on the model's own background knowledge of what's relevant.
 
 ### `digest.py`
 pydantic-ai agent that writes the full digest. Receives stories + feedback notes + language

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 
 from loguru import logger
 from pydantic_ai import Agent
@@ -375,6 +376,7 @@ async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         _generate_name(desc),
         research.expand_query(desc, ""),
         research.generate_source_guidance(desc, ""),
+        research.identify_sides(desc, ""),
         return_exceptions=True,
     )
     name = (
@@ -384,10 +386,12 @@ async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     expanded = results[1] if not isinstance(results[1], BaseException) else desc
     guidance = results[2] if not isinstance(results[2], BaseException) else None
+    sides = results[3] if not isinstance(results[3], BaseException) else []
 
     context.user_data["new_topic_name"] = name
     context.user_data["new_topic_desc"] = expanded
     context.user_data["new_topic_source_guidance"] = guidance
+    context.user_data["new_topic_sides_json"] = json.dumps([s.model_dump() for s in sides])
 
     await update.message.reply_text(
         f"📌 *{name}*\n🔍 _{expanded}_\n🌐 _{guidance}_\n\nLooks good?",
@@ -780,6 +784,7 @@ async def _create_topic(
     name = ud.pop("new_topic_name", "")
     desc = ud.pop("new_topic_desc", None)
     source_guidance = ud.pop("new_topic_source_guidance", None)
+    sides_json = ud.pop("new_topic_sides_json", None)
     freq = ud.pop("new_topic_freq", "daily")
     hour = ud.pop("new_topic_hour", 8)
     minute = ud.pop("new_topic_minute", 0)
@@ -802,6 +807,7 @@ async def _create_topic(
         schedule_days=schedule_days,
         timezone=tz,
         source_guidance=source_guidance,
+        sides_json=sides_json,
     )
     label = _sched_label_data(freq, hour, minute, dow, schedule_days, tz)
     tz_label = next((lbl for lbl, z in _TIMEZONES if z == tz), tz)
@@ -1779,6 +1785,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "awaiting_block_id",
             "awaiting_block_name",
             "new_topic_source_guidance",
+            "new_topic_sides_json",
             "awaiting_language",
         ):
             ud.pop(key, None)
@@ -1819,13 +1826,19 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         results = await asyncio.gather(
             research.expand_query(text, topic_name),
             research.generate_source_guidance(text, topic_name),
+            research.identify_sides(text, topic_name),
             return_exceptions=True,
         )
         expanded = results[0] if not isinstance(results[0], BaseException) else text
         guidance = results[1] if not isinstance(results[1], BaseException) else None
+        sides = results[2] if not isinstance(results[2], BaseException) else None
         await store.update_topic(topic_id, description=expanded)
         if guidance:
             await store.update_topic(topic_id, source_guidance=guidance)
+        if sides is not None:
+            await store.update_topic(
+                topic_id, sides_json=json.dumps([s.model_dump() for s in sides])
+            )
         await update.message.reply_text(
             f"✓ *{topic_name}* will now research:\n_{expanded}_\n\n"
             "Use /reset then /check to fetch fresh results.",

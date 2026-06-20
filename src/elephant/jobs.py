@@ -178,7 +178,7 @@ async def _run_digest(topic: Topic, bot: Bot) -> None:
 
     lookback = research._LOOKBACK.get(topic.frequency, "48 hours")
     stories = await perspectives.cluster(fresh, topic_name=topic.name, lookback=lookback)
-    stories = await propaganda.analyze(stories)
+    stories = await propaganda.analyze(stories, sides=topic.sides)
     language = await store.get_user_language(topic.telegram_id)
     output = await digest.generate(stories, topic.feedback_notes, language)
 

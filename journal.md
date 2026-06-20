@@ -210,3 +210,54 @@ no data touched. Per the no-edit-applied-migrations rule, migrations 001-006 wer
 Index names created by those old migrations still carry the `disputatio_*` prefix internally
 (Postgres doesn't rename indexes when you rename a table) — cosmetic, invisible anywhere in
 code or docs, not worth the extra renames.
+
+## 2026-06-20 17:30 — Added per-side outlet research + omission signal for source balance
+
+Real-world test: a Russia-Ukraine topic on the production bot surfaced zero Russian-side
+sources despite `source_guidance` explicitly naming TASS/RIA/Sputnik. Root cause, found by
+direct experimentation against the live research() service: Perplexity's retrieval is
+driven by the literal subject of a query, not by a "prioritise X" instruction buried in a
+longer prompt — naming an outlet as the query's subject sometimes works, naming it in a
+guidance list embedded in a broader query basically never does. Confirmed via repeated
+calls that even subject-anchored named-outlet queries are genuinely probabilistic (~50-60%
+hit rate in testing), not deterministic — this is a real limitation of the search backend,
+not something prompt tuning fixes.
+
+Decided against two things during the investigation:
+- A country-specific "prioritise X" example in `_source_profiler`'s prompt — would bias
+  toward conflicts we thought to list and fail to generalize. Replaced with a general
+  principle (identify every conflicting party, name leaning outlets per party) — verified
+  it generalizes correctly across Russia-Ukraine, Venezuela (government vs. opposition),
+  and AI regulation (regulator vs. industry) without any hardcoded country list.
+- Announcing "no Russian coverage found" in the digest when a side comes up empty — would
+  mean confessing search failures conversationally. Instead: research tries (per-side
+  focused queries, same mechanism as tracked sources), and if a side's coverage genuinely
+  doesn't show up, the digest just has less to say about it. The *signal* that matters is
+  the propaganda module's new "omits a clearly relevant other side" check — it flags a
+  source for ignoring another party's position, which is actionable, rather than the bot
+  narrating its own research gaps.
+
+Architecture: new `identify_sides()` agent (research.py, "balanced" tier — "fast" tier was
+empirically too weak for this judgment call, tested side by side) returns `list[Side]`
+(name + outlets), empty for topics with no inherent sides. Generated once per topic
+(creation or description edit), stored as `Topic.sides_json` (migration 008). `gather()`
+fires one focused per-outlet query for up to 2 outlets per side, same `_query_source`
+mechanism as user-tracked sources. `propaganda.analyze()` takes the sides list and checks
+each source's coverage for ignoring a relevant other party — verified case manually: a
+Kyiv Independent-style summary got flagged for omitting Russian statements, a TASS-style
+summary got flagged for omitting Ukrainian claims. Symmetric, as the policy requires.
+
+Found and fixed two real bugs while building this, surfaced by the first end-to-end test:
+1. `_query_source()` (used for all per-outlet queries, not just the new side ones) was
+   blindly labeling every citation with the outlet name it asked about, regardless of
+   which domain the citation actually came from — querying "RT" returned mostly unrelated
+   domains (understandingwar.org, youtube.com, nytimes.com...) all mislabeled "RT". Fixed
+   by always deriving `Article.source` from the real URL domain, matching how the general
+   query already worked. This was a pre-existing bug affecting tracked sources too, not
+   something introduced by this feature — just much more consequential once the feature
+   specifically targets contested-narrative outlets.
+2. `_query_source()` had no domain blocklist at all (by original design — "if you typed a
+   source, you want it regardless"), so YouTube/social links leaked through for per-outlet
+   queries. That's a defensible choice for sources the *user* typed in, but auto-suggested
+   side outlets were never chosen by the user, so they now get the same blocklist the
+   general query already has.

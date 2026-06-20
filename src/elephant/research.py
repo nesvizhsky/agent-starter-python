@@ -27,11 +27,12 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 from loguru import logger
+from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from agent.services.llm import Research, build_model
 from agent.services.llm import research as _research
-from elephant.models import Article, Topic
+from elephant.models import Article, Side, Topic
 
 _LOOKBACK: dict[str, str] = {
     "daily": "48 hours",
@@ -145,20 +146,38 @@ async def gather(topic: Topic) -> list[Article]:
     active = [s for s in topic.sources if s.lower() not in excluded]
     lookback = _LOOKBACK.get(topic.frequency, "48 hours")
 
+    # Side outlets: up to _MAX_OUTLETS_PER_SIDE per identified side, skipping anything
+    # already covered by a user-tracked source or explicitly excluded.
+    already_tracked = {s.lower() for s in active} | excluded
+    side_outlets: list[str] = []
+    for side in topic.sides:
+        for outlet in side.outlets[:_MAX_OUTLETS_PER_SIDE]:
+            if outlet.lower() not in already_tracked:
+                side_outlets.append(outlet)
+                already_tracked.add(outlet.lower())
+
     # Use description as the research query when set — it's the user's detailed focus.
     # Fall back to name so the short label still produces sensible results.
     query_subject = topic.description or topic.name
     source_instr = topic.source_guidance or _GENERAL_QUERY_INSTRUCTIONS
     today = datetime.now(UTC).strftime("%B %d, %Y")
     recency = _RECENCY_FILTER.get(topic.frequency, "week")
+    # User-tracked sources bypass domain filtering (they chose it deliberately).
+    # Auto-suggested side outlets get the same quality bar as the general query.
     coros = [_query_source(query_subject, src, lookback, today, recency) for src in active]
+    coros += [
+        _query_source(
+            query_subject, src, lookback, today, recency, block_domains=_BLOCKED_GENERAL_DOMAINS
+        )
+        for src in side_outlets
+    ]
     coros.append(_query_general(query_subject, lookback, today, source_instr, recency))
 
     raw = await asyncio.gather(*coros, return_exceptions=True)
 
     articles: list[Article] = []
     seen: set[str] = set()
-    source_labels = active + ["general"]
+    source_labels = active + side_outlets + ["general"]
     dropped = 0
 
     for label, result in zip(source_labels, raw, strict=True):
@@ -176,10 +195,12 @@ async def gather(topic: Topic) -> list[Article]:
             articles.append(article)
 
     logger.info(
-        "gathered {} articles for topic {!r} ({} sources + general, {} roundups dropped)",
+        "gathered {} articles for topic {!r} ({} tracked + {} side-outlet sources + general, "
+        "{} roundups dropped)",
         len(articles),
         topic.name,
         len(active),
+        len(side_outlets),
         dropped,
     )
     return articles
@@ -211,7 +232,12 @@ def _source_label(source: str) -> str:
 
 
 async def _query_source(
-    topic_name: str, source: str, lookback: str, today: str, recency: str = "week"
+    topic_name: str,
+    source: str,
+    lookback: str,
+    today: str,
+    recency: str = "week",
+    block_domains: frozenset[str] | None = None,
 ) -> list[Article]:
     cutoff = _cutoff_date(lookback)
     outlet = _source_label(source)
@@ -227,7 +253,7 @@ async def _query_source(
     except Exception:
         logger.exception("_research() call failed for source {!r}", source)
         return []
-    articles = _parse(result, default_source=source)
+    articles = _parse(result, block_domains=block_domains)
     logger.debug(
         "source {!r} → {} articles: {}", source, len(articles), [a.headline[:60] for a in articles]
     )
@@ -282,6 +308,49 @@ _source_profiler: Agent[None, str] = Agent(
 )
 
 
+_MAX_OUTLETS_PER_SIDE = 2
+
+
+class _SidesOutput(BaseModel):
+    sides: list[Side]
+
+
+_sides_identifier: Agent[None, _SidesOutput] = Agent(
+    build_model("balanced"),
+    output_type=_SidesOutput,
+    system_prompt=(
+        "You identify the distinct parties/perspectives involved in a news topic, if any. "
+        "Sides are not always nation-states — they can be government vs. opposition, "
+        "regulator vs. industry, factions within a country, or any other clearly opposed "
+        "or distinct parties relevant to the topic.\n\n"
+        "Rules:\n"
+        "1. If the topic has no inherent sides (e.g. archaeology, scientific discoveries, "
+        "general technology trends), return an EMPTY list. Do not invent sides that don't exist.\n"
+        "2. If sides exist, return one entry per side with 2-4 example outlet names that lean "
+        "toward or report favorably on that side's position — official state/institutional "
+        "media where it exists, plus other sympathetic press. Never name only one side; if you "
+        "identify any side, identify all of them.\n"
+        "3. Keep side names short and neutral, e.g. 'Russia', 'Ukraine', 'Government', "
+        "'Opposition', 'Industry', 'Regulators', 'Local residents'.\n"
+        "4. Outlet names only — no URLs, no descriptions."
+    ),
+)
+
+
+async def identify_sides(description: str, topic_name: str) -> list[Side]:
+    """Identify the distinct parties/perspectives in a topic, each with example outlets.
+
+    Returns an empty list for topics with no inherent sides, or if the LLM call fails.
+    """
+    prompt = f"Topic: {topic_name}\nDescription: {description}"
+    try:
+        result = await _sides_identifier.run(prompt)
+        return result.output.sides
+    except Exception:  # noqa: BLE001
+        logger.warning("side identification failed for {!r} — assuming none", topic_name)
+        return []
+
+
 async def generate_source_guidance(description: str, topic_name: str) -> str:
     """Generate topic-specific source guidance for the research query.
 
@@ -314,7 +383,7 @@ async def _query_general(
     except Exception:
         logger.exception("_research() general call failed for topic {!r}", topic_name)
         return []
-    articles = _parse(result, default_source="general", block_domains=_BLOCKED_GENERAL_DOMAINS)
+    articles = _parse(result, block_domains=_BLOCKED_GENERAL_DOMAINS, is_general_query=True)
     logger.debug(
         "general query → {} articles: {}", len(articles), [a.headline[:60] for a in articles]
     )
@@ -323,12 +392,16 @@ async def _query_general(
 
 def _parse(
     result: Research,
-    default_source: str,
     block_domains: frozenset[str] | None = None,
+    is_general_query: bool = False,
 ) -> list[Article]:
     """Turn a Research result into Article objects.
 
-    Each cited URL becomes one Article. The headline comes from the citation title.
+    Each cited URL becomes one Article. The source is always the citation's actual
+    domain — never the outlet we asked about — because Perplexity frequently cites
+    unrelated domains even when asked specifically about one outlet; trusting the
+    query target would mislabel those as if they came from the outlet we asked for.
+    The headline comes from the citation title.
     summary = headline (used for embedding-based dedup).
     context = the full Perplexity answer prose, attached to every article from
     this query so perspectives.py has real content to write about.
@@ -340,18 +413,18 @@ def _parse(
             continue
         domain = _source_from_url(src.url)
         if block_domains and any(domain.endswith(d) for d in block_domains):
-            logger.debug("blocked domain from general query: {}", domain)
+            logger.debug("blocked domain: {}", domain)
             continue
         headline = src.title or _headline_from_url(src.url)
-        source = domain if default_source == "general" else default_source
         articles.append(
             Article(
                 url=src.url,
                 headline=headline,
-                source=source,
+                source=domain,
                 published_at=None,  # Perplexity citations don't include dates
                 summary=headline,
                 context=result.text,
+                is_general_query=is_general_query,
             )
         )
     return articles
