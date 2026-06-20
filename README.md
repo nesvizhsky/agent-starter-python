@@ -1,21 +1,14 @@
-# Agent Starter (Python)
+# Eat the Elephant
 
-An opinionated, batteries-included starter for building AI agents — from simple scripts to Telegram bots to small web apps. You clone it, point Claude Code at it, and build.
+> Track any topic. Get daily briefings from sources that disagree. One bite at a time.
 
-> **One clone = one project.** Starting a new agent? Clone a fresh copy.
+A Telegram bot (`@eatelephant`) that helps you follow complex, contested topics — wars, elections, crises — without getting trapped in a single source's framing.
 
----
+**What I'm building:** A personal news briefing bot that gathers stories from multiple sources you choose, strips out what you've already seen, and delivers a structured daily digest in your language.
 
-## ✏️ Your project
+**Who it's for:** Anyone trying to stay genuinely informed on a topic where different sources tell very different stories — and who doesn't have time to read all of them.
 
-> Replace this section with *your* goal (this is stage 2 of the method — see below).
-> Keep it to a few sentences a friend would understand.
-
-**What I'm building:** _(one sentence)_
-
-**Who it's for and why:** _(a sentence or two)_
-
-**What "done" looks like:** _(what can the user do that they couldn't before?)_
+**What "done" looks like:** You add a topic, pick your sources, set a schedule. Every day the bot reads them all, finds what's new, and sends you a digest that shows where sources agree, where they diverge, and what rhetorical moves they're making.
 
 ---
 
