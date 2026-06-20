@@ -178,6 +178,16 @@ Two-pass freshness filter using `store.get_seen_urls()` and `store.get_seen_embe
 Cosine similarity via pgvector: `SELECT 1 - (embedding <=> $1) AS similarity`.
 Lookback window: 48h for daily topics, 7 days for weekly.
 
+### `article_dates.py`
+Perplexity citations (via OpenRouter) carry no publish date, which made the lookback
+filter above a no-op — every article passed with `published_at=None`. This module
+recovers a real date per URL for free: first from the URL path itself (most CMSs embed
+it, e.g. `/2026/06/19/...`), falling back to one short GET per undated URL to read
+`article:published_time` / JSON-LD `datePublished` / `<time datetime>` metadata. Runs
+after `gather()` assembles all articles, before `dedup.filter_seen()`. Fails open per-URL
+(stays `None`) when neither source has it — true today for section front pages and a
+minority of sites without structured date metadata.
+
 ### `perspectives.py`
 Groups `list[Article]` into `list[Story]` using a fast LLM call. Output:
 ```python

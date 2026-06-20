@@ -26,7 +26,10 @@ It is **not** a propagandist for any side, including its own analysis.
       If cosine similarity is above threshold → treat as "same story, already seen."
       This catches the same event republished under a different headline or URL.
    Also check article publication date: skip anything older than the lookback window
-   (e.g. 48h for daily topics, 7d for weekly topics).
+   (e.g. 48h for daily topics, 7d for weekly topics). Perplexity citations don't carry a
+   date, so this date is recovered directly from the source URL/page (see
+   elephant/article_dates.py) — without it this check was a no-op and old articles could
+   leak into a digest meant to cover only the recent window.
    If nothing passes both passes → send "nothing new" message and stop.
 4. Cluster into stories: group surviving articles covering the same event.
    Each story = one event + N source perspectives on it.

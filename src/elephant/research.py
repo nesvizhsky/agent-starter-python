@@ -32,6 +32,7 @@ from pydantic_ai import Agent
 
 from agent.services.llm import Research, build_model
 from agent.services.llm import research as _research
+from elephant.article_dates import attach_published_dates
 from elephant.models import Article, Side, Topic
 
 _LOOKBACK: dict[str, str] = {
@@ -193,6 +194,8 @@ async def gather(topic: Topic) -> list[Article]:
                 continue
             seen.add(article.url)
             articles.append(article)
+
+    await attach_published_dates(articles)
 
     logger.info(
         "gathered {} articles for topic {!r} ({} tracked + {} side-outlet sources + general, "
@@ -421,7 +424,7 @@ def _parse(
                 url=src.url,
                 headline=headline,
                 source=domain,
-                published_at=None,  # Perplexity citations don't include dates
+                published_at=None,  # filled in by attach_published_dates() after gathering
                 summary=headline,
                 context=result.text,
                 is_general_query=is_general_query,

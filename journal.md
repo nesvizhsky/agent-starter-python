@@ -261,3 +261,25 @@ Found and fixed two real bugs while building this, surfaced by the first end-to-
    queries. That's a defensible choice for sources the *user* typed in, but auto-suggested
    side outlets were never chosen by the user, so they now get the same blocklist the
    general query already has.
+
+## 2026-06-20 22:10 — Fixed the freshness filter being a silent no-op
+User feedback: a digest meant to cover June 18-20 included a piece from May 29. Traced
+it to `dedup.py`'s date filter (`a.published_at is None or a.published_at >= cutoff`):
+Perplexity citations via OpenRouter only ever return `url` + `title`, never a date, so
+every `Article.published_at` was always `None` and the `is None` clause let everything
+through unconditionally. Verified live — even with `search_recency_filter="week"` set,
+OpenRouter/Perplexity still cited a 2024 piece and several undated aggregator pages for
+a "what happened this week" query. The lookback filter existed and was unit-tested, but
+had never actually filtered anything in production.
+
+Considered calling Perplexity's native API directly (it does return `search_results[].date`,
+OpenRouter just drops it) — rejected for now: no extra paid credential, stay on what we
+already have. Went with recovering the date ourselves instead, for free: most news URLs
+embed the date in the path (`/2026/06/19/...`), and failing that, one short GET reads
+standard SEO metadata every major CMS already emits (`article:published_time`, JSON-LD
+`datePublished`, `<time datetime>`). New module `elephant/article_dates.py`, wired in at
+the end of `research.gather()` so `dedup.py` needed zero changes — it was already correct,
+just starved of real data. Confirmed end-to-end against a real article that had leaked
+into an earlier test digest: it resolved to its true date (3 months old) and would now
+be dropped by the existing lookback filter. Fails open (stays `None`, today's behavior)
+for the minority of pages with no date signal — mostly section front pages, not articles.
