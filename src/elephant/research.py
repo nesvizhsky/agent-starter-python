@@ -64,6 +64,13 @@ _BLOCKED_GENERAL_DOMAINS: frozenset[str] = frozenset(
     {
         "youtube.com",
         "youtu.be",
+        "instagram.com",
+        "facebook.com",
+        "twitter.com",
+        "x.com",
+        "tiktok.com",
+        "reddit.com",
+        "threads.net",
         "marketingprofs.com",
         "buildfastwithai.com",
         "promptailearning.com",
@@ -247,21 +254,30 @@ _source_profiler: Agent[None, str] = Agent(
     build_model("fast"),
     output_type=str,
     system_prompt=(
-        "You generate source guidance for a news research bot. Given a topic, write 1-3 sentences "
+        "You generate source guidance for a news research bot. Given a topic, write 2-4 sentences "
         "naming the most relevant outlets to prioritise. Think carefully about:\n"
         "1. Topic-specific specialist publications (e.g. IEEE Spectrum/Ars Technica for tech, "
         "The Lancet/NEJM for medicine, IAEA for nuclear, Variety/Deadline for film)\n"
         "2. Regional and national outlets in the LOCAL LANGUAGE if the topic is geographically "
-        "specific (e.g. for Israel/Palestine: Haaretz, Al Jazeera Arabic, Ynet; for Japan: "
-        "Nikkei Asia, NHK World, Mainichi; for Brazil: Folha de S.Paulo, O Globo, Agência Brasil; "
-        "for France: Le Monde, Le Figaro; for Russia: Meduza, The Insider, iStories)\n"
-        "3. Wire services and major international press (Reuters, AP, BBC, Guardian) as a base\n"
-        "4. Academic or institutional primary sources where relevant (arXiv, PubMed, INAH, WHO)\n\n"
-        "Always include both specialist/regional AND international coverage. "
+        "specific (e.g. for Japan: Nikkei Asia, NHK World, Mainichi; for Brazil: Folha de S.Paulo, "
+        "O Globo, Agência Brasil; for France: Le Monde, Le Figaro)\n"
+        "3. If the topic involves two or more conflicting parties (states, factions, government "
+        "vs. opposition, regulator vs. industry, etc.): identify each distinct party and name a "
+        "MIX of outlets that lean toward or report favorably on that party's position — official "
+        "state media or government channels where they exist, plus other sympathetic or aligned "
+        "press — not just outside commentary about that side. Do this symmetrically for every "
+        "party, never just some.\n"
+        "4. Wire services and major international press (Reuters, AP, BBC, Guardian) as a neutral, "
+        "outside-the-conflict layer\n"
+        "5. Academic or institutional primary sources where relevant (arXiv, PubMed, IAEA, WHO)\n\n"
+        "Always include specialist/regional, every conflicting party's own-leaning coverage, AND "
+        "international coverage together — never omit a party's side. "
         "Start directly with 'Prioritise:' — no preamble. "
-        "Example: 'Prioritise: Haaretz, Al Jazeera, Times of Israel, Reuters, AP, BBC. "
-        "Include Arabic-language sources (Al Jazeera Arabic, Asharq Al-Awsat) and Hebrew-language "
-        "sources (Ynet, Maariv) for regional perspectives.'"
+        "Example for a two-state conflict: 'Prioritise: [State A]'s state/government-aligned "
+        "outlets plus 1-2 independent [State A] outlets; [State B]'s state/government-aligned "
+        "outlets plus 1-2 independent [State B] outlets; Reuters, AP, BBC for international "
+        "coverage.' Replace the bracketed placeholders with the actual countries/parties involved "
+        "and real outlet names — never output literal brackets."
     ),
 )
 
