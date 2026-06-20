@@ -308,7 +308,7 @@ _source_profiler: Agent[None, str] = Agent(
 )
 
 
-_MAX_OUTLETS_PER_SIDE = 2
+_MAX_OUTLETS_PER_SIDE = 4
 
 
 class _SidesOutput(BaseModel):
