@@ -24,32 +24,21 @@ from elephant.models import Article
 
 SIMILARITY_THRESHOLD = 0.85  # cosine similarity above which we treat two articles as the same story
 
-_LOOKBACK_DAYS: dict[str, int] = {
-    "twice_daily": 1,
-    "daily": 2,
-    "weekdays": 2,
-    "mwf": 3,
-    "tuth": 3,
-    "custom_days": 3,
-    "weekly": 7,
-    "biweekly": 14,
-}
-
 
 async def filter_seen(
     topic_id: UUID,
     articles: list[Article],
-    frequency: str,
+    lookback_days: int,
 ) -> tuple[list[Article], list[list[float]]]:
     """Remove articles the user has already seen for *topic_id*.
 
+    lookback_days: freshness window, derived by jobs.py from whichever checkup
+    slot triggered this run (or a default for a manual /check).
     Returns (fresh_articles, their_embeddings).  The caller should pass both
     to store.record_seen() after sending the digest so future runs dedup correctly.
     """
     if not articles:
         return [], []
-
-    lookback_days = _LOOKBACK_DAYS.get(frequency, 2)
 
     # ------------------------------------------------------------------
     # Pass 1 — URL match (free, one query)

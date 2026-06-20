@@ -28,6 +28,23 @@ class Side(BaseModel):
     outlets: list[str] = Field(default_factory=list)
 
 
+class Slot(BaseModel):
+    """One recurring checkup: which day(s), what time, and how often.
+
+    A topic can have any number of slots — e.g. two "every day" slots at different
+    times (twice daily, arbitrary gap), or two single-day slots ("Mon 12:00" +
+    "Thu 10:00"). Each slot tracks its own last_sent_at so slots don't interfere
+    with each other's due-ness.
+    """
+
+    id: UUID | None = None  # None until persisted
+    days: list[int] = Field(default_factory=list)  # 0=Mon…6=Sun; empty = every day
+    hour: int
+    minute: int = 0
+    every_n_weeks: int = 0  # 0 = fire on every matching day; >=1 = gate to once every N weeks
+    last_sent_at: datetime | None = None
+
+
 class Topic(BaseModel):
     id: UUID
     telegram_id: int
@@ -35,12 +52,7 @@ class Topic(BaseModel):
     description: str | None
     display_name: str | None = None  # translated display label (UI only)
     display_description: str | None = None  # translated description (UI only)
-    frequency: str  # daily|twice_daily|weekdays|mwf|tuth|custom_days|weekly|biweekly
-    send_hour: int
-    send_minute: int  # minute of hour; scheduling checks hour only (cron fires hourly)
     timezone: str
-    send_dow: int  # 0=Monday … 6=Sunday; used when frequency='weekly' or 'biweekly'
-    schedule_days: str  # comma-separated DOW numbers (0=Mon…6=Sun) for frequency='custom_days'
     paused: bool
     sources: list[str]
     excluded_sources: list[str]
@@ -49,7 +61,8 @@ class Topic(BaseModel):
     source_guidance: str | None
     sides_json: str | None = None  # JSON-encoded list[Side]; use the `sides` property
     created_at: datetime
-    last_sent_at: datetime | None
+    last_sent_at: datetime | None  # most recent send across all slots; display only
+    slots: list[Slot] = Field(default_factory=list)  # populated separately by store.py
 
     @property
     def shown_name(self) -> str:

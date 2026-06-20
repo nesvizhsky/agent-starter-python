@@ -41,7 +41,7 @@ from agent.config import get_settings
 from agent.logging_setup import setup_logging
 from agent.services.llm import build_model
 from elephant import jobs, research, store
-from elephant.models import Topic
+from elephant.models import Slot, Topic
 
 # ---------------------------------------------------------------------------
 # ConversationHandler states (shared by /add_topic and /schedule)
@@ -55,6 +55,7 @@ _ASK_TIME = 4  # both: type a time
 _ASK_TZ = 5  # /add_topic only: pick timezone
 _AT_SOURCES = 6  # /add_topic only: enter sources
 _SC_PICK = 7  # /schedule: topic picker
+_ASK_ADD_ANOTHER = 8  # both: "add another checkup time?" after each slot
 
 
 async def _safe_answer(query: CallbackQuery, text: str = "", show_alert: bool = False) -> None:
@@ -99,11 +100,7 @@ _DOW_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday
 _SCHED_TYPE_LABELS: dict[str, str] = {
     "daily": "Every day",
     "twice_daily": "Twice daily",
-    "weekdays": "Mon–Fri",
-    "mwf": "Mon/Wed/Fri",
-    "tuth": "Tue/Thu",
     "custom_days": "Pick days…",
-    "weekly": "Once a week",
     "biweekly": "Every 2 weeks",
 }
 
@@ -159,7 +156,7 @@ _UI: dict[str, str] = {
 _ui_cache: dict[str, dict[str, str]] = {"English": _UI}
 
 # Frequency types that require a day-selection step
-_NEEDS_DAYS = frozenset({"custom_days", "weekly", "biweekly"})
+_NEEDS_DAYS = frozenset({"custom_days", "biweekly"})
 
 # (display label, IANA timezone name)
 _TIMEZONES = [
@@ -490,34 +487,88 @@ async def _sc_got_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return await _ask_sched_type(update, context)
 
 
+async def _tp_schedule_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Entry point for the 📅 button on a topic card — jumps straight into the
+    schedule-editing flow for that topic instead of telling the user to type
+    /schedule <name> themselves."""
+    query = update.callback_query
+    if query is None or query.data is None:
+        return ConversationHandler.END
+    await _safe_answer(query)
+    topic_id_str = query.data.split(":", 2)[2]
+    _reset_topic_flow_state(context)
+    if context.user_data is not None:
+        context.user_data["sched_mode"] = "update"
+        context.user_data["sched_topic_id"] = topic_id_str
+    if isinstance(query.message, Message):
+        await query.message.reply_text("Changing schedule…")
+    return await _ask_sched_type(update, context)
+
+
 # ---------------------------------------------------------------------------
 # Shared scheduling flow: type → days → time
 # ---------------------------------------------------------------------------
 
 
+def _back_button() -> InlineKeyboardButton:
+    return InlineKeyboardButton("←", callback_data="nav:back")
+
+
 async def _ask_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    n_slots = len(context.user_data.get("new_topic_slots", [])) if context.user_data else 0
+    prompt = "Add another checkup — how often?" if n_slots else "How often would you like updates?"
     keyboard = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton("Every day", callback_data="sched:daily"),
                 InlineKeyboardButton("Twice daily", callback_data="sched:twice_daily"),
             ],
-            [
-                InlineKeyboardButton("Mon–Fri", callback_data="sched:weekdays"),
-                InlineKeyboardButton("Mon/Wed/Fri", callback_data="sched:mwf"),
-            ],
-            [
-                InlineKeyboardButton("Tue/Thu", callback_data="sched:tuth"),
-                InlineKeyboardButton("Pick days…", callback_data="sched:custom_days"),
-            ],
-            [
-                InlineKeyboardButton("Once a week", callback_data="sched:weekly"),
-                InlineKeyboardButton("Every 2 weeks", callback_data="sched:biweekly"),
-            ],
+            [InlineKeyboardButton("Pick days…", callback_data="sched:custom_days")],
+            [InlineKeyboardButton("Every 2 weeks", callback_data="sched:biweekly")],
+            [_back_button()],
         ]
     )
-    await _reply(update, "How often would you like updates?", reply_markup=keyboard)
+    await _reply(update, prompt, reply_markup=keyboard)
     return _ASK_SCHED_TYPE
+
+
+async def _back_from_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """← from the "how often" screen: undo into whatever came before it —
+    the add-another prompt if a slot already exists, the name confirmation if
+    this is the very first slot of a new topic, or just cancel a /schedule edit."""
+    query = update.callback_query
+    if query is None or context.user_data is None:
+        return _ASK_SCHED_TYPE
+    await _safe_answer(query)
+    ud = context.user_data
+
+    slots: list[Slot] = ud.get("new_topic_slots", [])
+    if slots:
+        await query.edit_message_text("← Back")
+        await _reply(update, "Add another checkup time?", reply_markup=_add_another_keyboard())
+        return _ASK_ADD_ANOTHER
+
+    if ud.get("sched_mode") == "update":
+        await query.edit_message_text(_t(await _lang(query.from_user.id), "cancelled"))
+        _reset_topic_flow_state(context)
+        return ConversationHandler.END
+
+    name = ud.get("new_topic_name", "")
+    desc = ud.get("new_topic_desc", "")
+    guidance = ud.get("new_topic_source_guidance", "")
+    await query.edit_message_text(
+        f"📌 *{name}*\n🔍 _{desc}_\n🌐 _{guidance}_\n\nLooks good?",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Continue →", callback_data="name:ok"),
+                    InlineKeyboardButton("Rename it", callback_data="name:rename"),
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+    return _AT_NAME_CONFIRM
 
 
 async def _got_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -530,10 +581,12 @@ async def _got_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.edit_message_text(f"✓ {_SCHED_TYPE_LABELS.get(freq, freq)}")
 
     if freq in _NEEDS_DAYS:
-        mode = "single" if freq in {"weekly", "biweekly"} else "multi"
+        mode = "multi" if freq == "custom_days" else "single"
         context.user_data["sched_days_mode"] = mode
         context.user_data["selected_days"] = set()
         return await _ask_sched_days(update, context)
+    if freq == "twice_daily":
+        context.user_data["_twice_daily_pending"] = True
     return await _ask_time(update, context)
 
 
@@ -543,7 +596,7 @@ def _day_toggle_keyboard(selected: set[int]) -> InlineKeyboardMarkup:
 
     row1 = [InlineKeyboardButton(lbl(i), callback_data=f"day_toggle:{i}") for i in range(4)]
     row2 = [InlineKeyboardButton(lbl(i), callback_data=f"day_toggle:{i}") for i in range(4, 7)]
-    done_row = [InlineKeyboardButton("Done ✓", callback_data="day_done")]
+    done_row = [InlineKeyboardButton("Done ✓", callback_data="day_done"), _back_button()]
     return InlineKeyboardMarkup([row1, row2, done_row])
 
 
@@ -551,7 +604,8 @@ def _day_single_keyboard() -> InlineKeyboardMarkup:
     def _btn(i: int) -> InlineKeyboardButton:
         return InlineKeyboardButton(_DOW_SHORT[i], callback_data=f"dow_single:{i}")
 
-    return InlineKeyboardMarkup([[_btn(i) for i in range(4)], [_btn(i) for i in range(4, 7)]])
+    row2 = [_btn(i) for i in range(4, 7)] + [_back_button()]
+    return InlineKeyboardMarkup([[_btn(i) for i in range(4)], row2])
 
 
 async def _ask_sched_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -566,14 +620,26 @@ async def _ask_sched_days(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode="Markdown",
         )
     else:
-        freq = ud.get("new_topic_freq", "weekly") if ud else "weekly"
-        label = "week" if freq == "weekly" else "2 weeks"
         await _reply(
             update,
-            f"Which day? (once every {label})",
+            "Which day? (once every 2 weeks)",
             reply_markup=_day_single_keyboard(),
         )
     return _ASK_SCHED_DAYS
+
+
+async def _back_from_sched_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """← from the day-picker: discard the in-progress day selection and return
+    to the "how often" screen."""
+    query = update.callback_query
+    if query is None or context.user_data is None:
+        return _ASK_SCHED_DAYS
+    await _safe_answer(query)
+    context.user_data.pop("selected_days", None)
+    context.user_data.pop("sched_days_mode", None)
+    context.user_data.pop("new_topic_freq", None)
+    await query.edit_message_text("← Back")
+    return await _ask_sched_type(update, context)
 
 
 async def _toggle_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -644,22 +710,115 @@ def _parse_time(text: str) -> tuple[int, int]:
 
 
 async def _ask_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    ud = context.user_data
+    if ud and ud.get("_twice_daily_second"):
+        prompt = "What's the second time?"
+    elif ud and ud.get("_twice_daily_pending"):
+        prompt = "What's the first time?"
+    else:
+        prompt = "What time?"
     await _reply(
         update,
-        "What time? Type it, e.g. *9:00* or *21:30*\n(your local time, 24-hour or am/pm)",
+        f"{prompt} Type it, e.g. *9:00* or *21:30*\n(your local time, 24-hour or am/pm)",
         parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[_back_button()]]),
     )
     return _ASK_TIME
+
+
+async def _back_from_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """← from the time prompt: return to wherever the time question for this
+    slot was reached from — the day-picker, the "how often" screen, or (for
+    twice daily's second time) re-ask the first time."""
+    query = update.callback_query
+    if query is None or context.user_data is None:
+        return _ASK_TIME
+    await _safe_answer(query)
+    ud = context.user_data
+    await query.edit_message_text("← Back")
+
+    if ud.pop("_twice_daily_second", False):
+        ud["new_topic_freq"] = "twice_daily"
+        ud["_twice_daily_pending"] = True
+        return await _ask_time(update, context)
+
+    ud.pop("_twice_daily_pending", None)
+    freq = ud.get("new_topic_freq", "daily")
+    if freq in _NEEDS_DAYS:
+        return await _ask_sched_days(update, context)
+    return await _ask_sched_type(update, context)
+
+
+def _finish_slot(ud: dict[str, object], hour: int, minute: int) -> Slot:
+    """Build a Slot from the current "freq + days" selection plus the time just typed,
+    then clear those temporary keys so the next loop iteration starts fresh."""
+    freq = str(ud.pop("new_topic_freq", "daily"))
+    dow = ud.pop("new_topic_dow", None)
+    schedule_days = str(ud.pop("new_topic_schedule_days", ""))
+    ud.pop("sched_days_mode", None)
+    ud.pop("selected_days", None)
+
+    if freq == "custom_days":
+        days = [int(d) for d in schedule_days.split(",") if d.strip()]
+        every_n_weeks = 0
+    elif freq == "biweekly":
+        days = [int(dow)] if isinstance(dow, int) else [0]
+        every_n_weeks = 2
+    else:  # "daily" or "twice_daily" — twice_daily's second slot is also "daily"
+        days, every_n_weeks = [], 0
+
+    return Slot(days=days, hour=hour, minute=minute, every_n_weeks=every_n_weeks)
+
+
+def _add_another_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("+ Add another", callback_data="slot:add"),
+                InlineKeyboardButton("Done ✓", callback_data="slot:done"),
+            ],
+            [InlineKeyboardButton("←", callback_data="slot:back")],
+        ]
+    )
 
 
 async def _got_time_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None or not update.message.text or context.user_data is None:
         return _ASK_TIME
     h, m = _parse_time(update.message.text)
-    context.user_data["new_topic_hour"] = h
-    context.user_data["new_topic_minute"] = m
+    slot = _finish_slot(context.user_data, h, m)
+    context.user_data.setdefault("new_topic_slots", []).append(slot)
     await update.message.reply_text(f"✓ {h:02d}:{m:02d}")
 
+    if context.user_data.pop("_twice_daily_pending", False):
+        context.user_data["new_topic_freq"] = "daily"
+        context.user_data["_twice_daily_second"] = True
+        return await _ask_time(update, context)
+    context.user_data.pop("_twice_daily_second", None)
+
+    await _reply(update, "Add another checkup time?", reply_markup=_add_another_keyboard())
+    return _ASK_ADD_ANOTHER
+
+
+async def _got_add_another(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query is None or query.data is None or context.user_data is None:
+        return _ASK_ADD_ANOTHER
+    await _safe_answer(query)
+    action = query.data.split(":", 1)[1]
+
+    if action == "back":
+        slots: list[Slot] = context.user_data.get("new_topic_slots", [])
+        if slots:
+            slots.pop()
+        await query.edit_message_text("← Back")
+        return await _ask_sched_type(update, context)
+
+    if action == "add":
+        await query.edit_message_text("Adding another checkup time…")
+        return await _ask_sched_type(update, context)
+
+    await query.edit_message_text("✓ Done")
     if context.user_data.get("sched_mode") == "update":
         return await _update_schedule(update, context)
     return await _ask_tz(update, context)
@@ -683,27 +842,16 @@ async def _update_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.message.reply_text(_t(ul_s, "topic_nf"))
         return ConversationHandler.END
 
-    freq = ud.pop("new_topic_freq", "daily")
-    hour = ud.pop("new_topic_hour", 8)
-    minute = ud.pop("new_topic_minute", 0)
-    dow = ud.pop("new_topic_dow", topic.send_dow)
-    schedule_days = ud.pop("new_topic_schedule_days", "")
+    slots: list[Slot] = ud.pop("new_topic_slots", [])
     ud.pop("sched_mode", None)
-    ud.pop("sched_days_mode", None)
-    ud.pop("selected_days", None)
 
-    await store.update_topic(
-        topic_id,
-        frequency=freq,
-        send_hour=hour,
-        send_minute=minute,
-        send_dow=dow,
-        schedule_days=schedule_days,
-    )
-    label = _sched_label_data(freq, hour, minute, dow, schedule_days, topic.timezone)
+    await store.replace_slots(topic_id, slots)
+    label = _sched_label_for_slots(slots, topic.timezone)
     msg = f"✓ Schedule updated for *{_short(topic.name)}*:\n{label}"
     if update.message:
         await update.message.reply_text(msg, parse_mode="Markdown")
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(msg, parse_mode="Markdown")  # type: ignore[union-attr]
     return ConversationHandler.END
 
 
@@ -721,6 +869,7 @@ async def _ask_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[3:6]],
         [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[6:9]],
         [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[9:]],
+        [_back_button()],
     ]
     await _reply(
         update,
@@ -731,6 +880,17 @@ async def _ask_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         parse_mode="Markdown",
     )
     return _ASK_TZ
+
+
+async def _back_from_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """← from the timezone screen: return to the add-another-checkup prompt."""
+    query = update.callback_query
+    if query is None:
+        return _ASK_TZ
+    await _safe_answer(query)
+    await query.edit_message_text("← Back")
+    await _reply(update, "Add another checkup time?", reply_markup=_add_another_keyboard())
+    return _ASK_ADD_ANOTHER
 
 
 async def _got_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -787,31 +947,21 @@ async def _create_topic(
     desc = ud.pop("new_topic_desc", None)
     source_guidance = ud.pop("new_topic_source_guidance", None)
     sides_json = ud.pop("new_topic_sides_json", None)
-    freq = ud.pop("new_topic_freq", "daily")
-    hour = ud.pop("new_topic_hour", 8)
-    minute = ud.pop("new_topic_minute", 0)
-    dow = ud.pop("new_topic_dow", 0)
-    schedule_days = ud.pop("new_topic_schedule_days", "")
+    slots: list[Slot] = ud.pop("new_topic_slots", [])
     tz = ud.pop("new_topic_tz", "UTC")
     ud.pop("sched_mode", None)
-    ud.pop("sched_days_mode", None)
-    ud.pop("selected_days", None)
 
     topic = await store.create_topic(
         tg.id,
         name=name,
         description=desc,
         sources=sources,
-        frequency=freq,
-        send_hour=hour,
-        send_minute=minute,
-        send_dow=dow,
-        schedule_days=schedule_days,
+        slots=slots,
         timezone=tz,
         source_guidance=source_guidance,
         sides_json=sides_json,
     )
-    label = _sched_label_data(freq, hour, minute, dow, schedule_days, tz)
+    label = _sched_label_for_slots(slots, tz)
     tz_label = next((lbl for lbl, z in _TIMEZONES if z == tz), tz)
     msg = (
         f"✓ *{topic.name}* created.\n"
@@ -832,11 +982,12 @@ _TOPIC_FLOW_KEYS = (
     "new_topic_source_guidance",
     "new_topic_sides_json",
     "new_topic_freq",
-    "new_topic_hour",
-    "new_topic_minute",
     "new_topic_dow",
     "new_topic_tz",
     "new_topic_schedule_days",
+    "new_topic_slots",
+    "_twice_daily_pending",
+    "_twice_daily_second",
     "sched_mode",
     "sched_topic_id",
     "sched_days_mode",
@@ -876,39 +1027,46 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _sched_label(topic: Topic, lang: str = "English") -> str:
-    """Short human-readable schedule for /topics list: 'Mon/Wed/Fri · 09:00'."""
-    return _sched_label_data(
-        topic.frequency,
-        topic.send_hour,
-        topic.send_minute,
-        topic.send_dow,
-        topic.schedule_days,
-        topic.timezone,
-        lang,
-    )
+def _slot_label(slot: Slot, lang: str = "English") -> str:
+    """Human-readable label for one slot, e.g. 'Mon/Wed/Fri · 09:00' or 'Every day · 10:00'."""
+    time_str = f"{slot.hour:02d}:{slot.minute:02d}"
+    days_set = set(slot.days)
+    if not days_set:
+        day_part = _t(lang, "sched_daily")
+    elif days_set == {0, 1, 2, 3, 4}:
+        day_part = _t(lang, "sched_weekdays")
+    elif days_set == {0, 2, 4}:
+        day_part = _t(lang, "sched_mwf")
+    elif days_set == {1, 3}:
+        day_part = _t(lang, "sched_tuth")
+    elif len(slot.days) == 1:
+        day_part = _t(lang, f"dow_{slot.days[0]}")
+    else:
+        day_part = " / ".join(_t(lang, f"dows_{d}") for d in sorted(days_set))
+
+    if slot.every_n_weeks >= 1:
+        cadence = (
+            _t(lang, "sched_weekly")
+            if slot.every_n_weeks == 1
+            else f"Every {slot.every_n_weeks} weeks"
+        )
+        return f"{cadence} ({day_part}) · {time_str}"
+    return f"{day_part} · {time_str}"
 
 
-def _sched_label_data(
-    freq: str,
-    hour: int,
-    minute: int,
-    dow: int,
-    schedule_days: str,
-    timezone: str,
-    lang: str = "English",
-) -> str:
-    sched_key = f"sched_{freq}"
-    freq_name = _t(lang, sched_key) if sched_key in _UI else _SCHED_TYPE_LABELS.get(freq, freq)
-    if freq in {"weekly", "biweekly"}:
-        freq_name = f"{freq_name} ({_t(lang, f'dow_{dow}')})"
-    elif freq == "custom_days" and schedule_days:
-        freq_name = " / ".join(_t(lang, f"dows_{d}") for d in schedule_days.split(",") if d.strip())
+def _sched_label_for_slots(slots: list[Slot], timezone: str, lang: str = "English") -> str:
+    """Human-readable schedule summary across all of a topic's slots."""
+    if not slots:
+        return _t(lang, "never_sent")
+    ordered = sorted(slots, key=lambda s: (s.hour, s.minute))
+    body = " & ".join(_slot_label(s, lang) for s in ordered)
     tz_short = next((lbl.split()[0] for lbl, z in _TIMEZONES if z == timezone), "")
-    time_str = f"{hour:02d}:{minute:02d}"
-    if tz_short:
-        return f"{freq_name} · {time_str} ({tz_short})"
-    return f"{freq_name} · {time_str}"
+    return f"{body} ({tz_short})" if tz_short else body
+
+
+def _sched_label(topic: Topic, lang: str = "English") -> str:
+    """Short human-readable schedule for /topics list and topic cards."""
+    return _sched_label_for_slots(topic.slots, topic.timezone, lang)
 
 
 # ---------------------------------------------------------------------------
@@ -1183,12 +1341,6 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.edit_message_text(
             text + f"\n\n{_t(lang, 'cleared_n', n=n, name=_short(topic.shown_name))}",
             reply_markup=keyboard,
-            parse_mode="Markdown",
-        )
-
-    elif action == "schedule":
-        await query.message.reply_text(  # type: ignore[union-attr]
-            f"To change the schedule for *{_short(topic.name)}*, type:\n/schedule {topic.name}",
             parse_mode="Markdown",
         )
 
@@ -1959,6 +2111,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
             CommandHandler("add_topic", cmd_add_topic),
             CommandHandler("schedule", cmd_schedule),
             CallbackQueryHandler(_start_add_topic_cb, pattern=r"^start:add_topic$"),
+            CallbackQueryHandler(_tp_schedule_entry, pattern=r"^tp:schedule:"),
         ],
         states={
             _AT_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, _got_desc)],
@@ -1968,14 +2121,25 @@ def build_application() -> Application:  # type: ignore[type-arg]
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _got_custom_name),
             ],
             _SC_PICK: [CallbackQueryHandler(_sc_got_topic, pattern=r"^sc_pick:")],
-            _ASK_SCHED_TYPE: [CallbackQueryHandler(_got_sched_type, pattern=r"^sched:")],
+            _ASK_SCHED_TYPE: [
+                CallbackQueryHandler(_got_sched_type, pattern=r"^sched:"),
+                CallbackQueryHandler(_back_from_sched_type, pattern=r"^nav:back$"),
+            ],
             _ASK_SCHED_DAYS: [
                 CallbackQueryHandler(_toggle_day, pattern=r"^day_toggle:"),
                 CallbackQueryHandler(_done_days, pattern=r"^day_done$"),
                 CallbackQueryHandler(_got_single_day, pattern=r"^dow_single:"),
+                CallbackQueryHandler(_back_from_sched_days, pattern=r"^nav:back$"),
             ],
-            _ASK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, _got_time_text)],
-            _ASK_TZ: [CallbackQueryHandler(_got_tz, pattern=r"^tz:")],
+            _ASK_TIME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _got_time_text),
+                CallbackQueryHandler(_back_from_time, pattern=r"^nav:back$"),
+            ],
+            _ASK_ADD_ANOTHER: [CallbackQueryHandler(_got_add_another, pattern=r"^slot:")],
+            _ASK_TZ: [
+                CallbackQueryHandler(_got_tz, pattern=r"^tz:"),
+                CallbackQueryHandler(_back_from_tz, pattern=r"^nav:back$"),
+            ],
             _AT_SOURCES: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _got_sources_text),
                 CallbackQueryHandler(_got_sources_skip, pattern=r"^sources:skip"),
@@ -1990,6 +2154,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
             CommandHandler("add_topic", cmd_add_topic),
             CommandHandler("schedule", cmd_schedule),
             CallbackQueryHandler(_start_add_topic_cb, pattern=r"^start:add_topic$"),
+            CallbackQueryHandler(_tp_schedule_entry, pattern=r"^tp:schedule:"),
         ],
         conversation_timeout=600,  # 10 min — abandoned flows clean up instead of staying stuck
         per_message=False,

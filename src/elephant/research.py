@@ -35,30 +35,31 @@ from agent.services.llm import research as _research
 from elephant.article_dates import attach_published_dates
 from elephant.models import Article, Side, Topic
 
-_LOOKBACK: dict[str, str] = {
-    "daily": "48 hours",
-    "twice_daily": "24 hours",
-    "weekdays": "48 hours",
-    "mwf": "72 hours",
-    "tuth": "72 hours",
-    "custom_days": "72 hours",
-    "weekly": "7 days",
-    "biweekly": "14 days",
-}
 
-# Maps frequency to Perplexity's search_recency_filter value.
-# Belt-and-suspenders alongside search_after_date_filter — more reliably
-# forwarded by OpenRouter than the date-based filter.
-_RECENCY_FILTER: dict[str, str] = {
-    "twice_daily": "day",
-    "daily": "day",  # "day" is 24h; prompt+date filter cover the 24-48h gap
-    "weekdays": "day",
-    "mwf": "week",
-    "tuth": "week",
-    "custom_days": "week",
-    "weekly": "week",
-    "biweekly": "month",
-}
+def lookback_label(hours: int) -> str:
+    """Turn an hour count into a human/Perplexity-friendly lookback string.
+
+    e.g. 48 -> "2 days", 30 -> "30 hours". Used both in research prompts and
+    as the freshness hint shown to perspectives.cluster().
+    """
+    if hours >= 24 and hours % 24 == 0:
+        days = hours // 24
+        return f"{days} day{'s' if days != 1 else ''}"
+    return f"{hours} hours"
+
+
+def _recency_filter(hours: int) -> str:
+    """Map an hour count to Perplexity's search_recency_filter bucket.
+
+    Belt-and-suspenders alongside search_after_date_filter — more reliably
+    forwarded by OpenRouter than the date-based filter.
+    """
+    if hours <= 24:
+        return "day"
+    if hours <= 24 * 7:
+        return "week"
+    return "month"
+
 
 # Domains excluded from the *general* query results only.
 # User-configured sources are never filtered this way.
@@ -137,15 +138,17 @@ async def expand_query(raw: str, topic_name: str) -> str:
         return raw
 
 
-async def gather(topic: Topic) -> list[Article]:
+async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
     """Fetch articles for *topic* from all active sources.
 
     Fires queries concurrently. Logs and skips any source that fails rather
     than aborting the whole digest. Drops roundup/listicle articles globally.
+    lookback_hours: how far back to search — derived by jobs.py from whichever
+    checkup slot triggered this run.
     """
     excluded = {s.lower() for s in topic.excluded_sources}
     active = [s for s in topic.sources if s.lower() not in excluded]
-    lookback = _LOOKBACK.get(topic.frequency, "48 hours")
+    lookback = lookback_label(lookback_hours)
 
     # Side outlets: up to _MAX_OUTLETS_PER_SIDE per identified side, skipping anything
     # already covered by a user-tracked source or explicitly excluded.
@@ -162,7 +165,7 @@ async def gather(topic: Topic) -> list[Article]:
     query_subject = topic.description or topic.name
     source_instr = topic.source_guidance or _GENERAL_QUERY_INSTRUCTIONS
     today = datetime.now(UTC).strftime("%B %d, %Y")
-    recency = _RECENCY_FILTER.get(topic.frequency, "week")
+    recency = _recency_filter(lookback_hours)
     # User-tracked sources bypass domain filtering (they chose it deliberately).
     # Auto-suggested side outlets get the same quality bar as the general query.
     coros = [_query_source(query_subject, src, lookback, today, recency) for src in active]

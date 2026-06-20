@@ -15,7 +15,7 @@ from pathlib import Path
 from uuid import UUID
 
 from agent.services import db
-from elephant.models import Article, Topic, User
+from elephant.models import Article, Slot, Topic, User
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
@@ -25,11 +25,6 @@ _UPDATABLE_TOPIC_FIELDS = frozenset(
         "description",
         "display_name",
         "display_description",
-        "frequency",
-        "send_hour",
-        "send_minute",
-        "send_dow",
-        "schedule_days",
         "timezone",
         "paused",
         "sources",
@@ -47,8 +42,52 @@ def _vec(embedding: list[float]) -> str:
     return "[" + ",".join(str(x) for x in embedding) + "]"
 
 
-def _topic(row: object) -> Topic:
-    return Topic.model_validate(dict(row))  # type: ignore[arg-type]
+def _slot(row: object) -> Slot:
+    d: dict[str, object] = dict(row)  # type: ignore[arg-type]
+    days_str = str(d.pop("days", "") or "")
+    d["days"] = [int(x) for x in days_str.split(",") if x.strip()]
+    return Slot.model_validate(d)
+
+
+async def _slots_by_topic(topic_ids: list[UUID]) -> dict[UUID, list[Slot]]:
+    if not topic_ids:
+        return {}
+    rows = await db.fetch(
+        "SELECT * FROM elephant_topic_slots WHERE topic_id = ANY($1) ORDER BY hour, minute",
+        topic_ids,
+    )
+    grouped: dict[UUID, list[Slot]] = {tid: [] for tid in topic_ids}
+    for row in rows:
+        grouped.setdefault(row["topic_id"], []).append(_slot(row))
+    return grouped
+
+
+def _topic(row: object, slots: list[Slot] | None = None) -> Topic:
+    topic = Topic.model_validate(dict(row))  # type: ignore[arg-type]
+    topic.slots = slots or []
+    return topic
+
+
+async def _attach_slots(topics: list[Topic]) -> list[Topic]:
+    grouped = await _slots_by_topic([t.id for t in topics])
+    for t in topics:
+        t.slots = grouped.get(t.id, [])
+    return topics
+
+
+async def _insert_slots(topic_id: UUID, slots: list[Slot]) -> None:
+    for slot in slots:
+        await db.execute(
+            """
+            INSERT INTO elephant_topic_slots (topic_id, days, hour, minute, every_n_weeks)
+            VALUES ($1, $2, $3, $4, $5)
+            """,
+            topic_id,
+            ",".join(str(d) for d in slot.days),
+            slot.hour,
+            slot.minute,
+            slot.every_n_weeks,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +167,7 @@ async def get_topics(telegram_id: int) -> list[Topic]:
         "SELECT * FROM elephant_topics WHERE telegram_id = $1 ORDER BY created_at",
         telegram_id,
     )
-    return [_topic(r) for r in rows]
+    return await _attach_slots([_topic(r) for r in rows])
 
 
 async def get_topic(telegram_id: int, topic_id: UUID) -> Topic | None:
@@ -137,7 +176,11 @@ async def get_topic(telegram_id: int, topic_id: UUID) -> Topic | None:
         topic_id,
         telegram_id,
     )
-    return _topic(row) if row else None
+    if row is None:
+        return None
+    topic = _topic(row)
+    topic.slots = (await _slots_by_topic([topic.id])).get(topic.id, [])
+    return topic
 
 
 async def get_topic_by_name(telegram_id: int, name: str) -> Topic | None:
@@ -146,18 +189,18 @@ async def get_topic_by_name(telegram_id: int, name: str) -> Topic | None:
         telegram_id,
         name,
     )
-    return _topic(row) if row else None
+    if row is None:
+        return None
+    topic = _topic(row)
+    topic.slots = (await _slots_by_topic([topic.id])).get(topic.id, [])
+    return topic
 
 
 async def create_topic(
     telegram_id: int,
     *,
     name: str,
-    frequency: str = "daily",
-    send_hour: int = 8,
-    send_minute: int = 0,
-    send_dow: int = 0,
-    schedule_days: str = "",
+    slots: list[Slot],
     timezone: str = "UTC",
     sources: list[str],
     description: str | None = None,
@@ -167,26 +210,23 @@ async def create_topic(
     row = await db.fetchrow(
         """
         INSERT INTO elephant_topics
-            (telegram_id, name, description, frequency,
-             send_hour, send_minute, send_dow, schedule_days, timezone, sources,
+            (telegram_id, name, description, timezone, sources,
              source_guidance, sides_json)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING *
         """,
         telegram_id,
         name,
         description,
-        frequency,
-        send_hour,
-        send_minute,
-        send_dow,
-        schedule_days,
         timezone,
         sources,
         source_guidance,
         sides_json,
     )
-    return _topic(row)  # type: ignore[arg-type]
+    topic = _topic(row)  # type: ignore[arg-type]
+    await _insert_slots(topic.id, slots)
+    topic.slots = slots
+    return topic
 
 
 async def update_topic(topic_id: UUID, **fields: object) -> None:
@@ -205,10 +245,23 @@ async def update_topic(topic_id: UUID, **fields: object) -> None:
     )
 
 
+async def replace_slots(topic_id: UUID, slots: list[Slot]) -> None:
+    """Replace a topic's entire set of checkup slots with *slots*."""
+    await db.execute("DELETE FROM elephant_topic_slots WHERE topic_id = $1", topic_id)
+    await _insert_slots(topic_id, slots)
+
+
 async def stamp_sent(topic_id: UUID) -> None:
     await db.execute(
         "UPDATE elephant_topics SET last_sent_at = now() WHERE id = $1",
         topic_id,
+    )
+
+
+async def stamp_slot_sent(slot_id: UUID) -> None:
+    await db.execute(
+        "UPDATE elephant_topic_slots SET last_sent_at = now() WHERE id = $1",
+        slot_id,
     )
 
 
@@ -217,7 +270,7 @@ async def get_all_active_topics() -> list[Topic]:
     rows = await db.fetch(
         "SELECT * FROM elephant_topics WHERE paused = false ORDER BY telegram_id, created_at",
     )
-    return [_topic(r) for r in rows]
+    return await _attach_slots([_topic(r) for r in rows])
 
 
 # ---------------------------------------------------------------------------

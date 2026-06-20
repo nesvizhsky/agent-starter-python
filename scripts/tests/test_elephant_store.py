@@ -12,7 +12,7 @@ import pytest
 
 from agent.services import db
 from elephant import store
-from elephant.models import Article
+from elephant.models import Article, Slot
 
 TEST_USER_ID = 999_000_001  # unlikely to collide with a real Telegram id
 
@@ -52,13 +52,18 @@ async def test_topic_lifecycle() -> None:
         TEST_USER_ID,
         name="War in Ukraine",
         sources=["BBC", "TASS", "Ukrainska Pravda", "Meduza"],
-        frequency="daily",
-        send_hour=8,
+        slots=[Slot(days=[], hour=8)],
         timezone="Europe/London",
     )
     assert topic.name == "War in Ukraine"
     assert "BBC" in topic.sources
     assert topic.paused is False
+    assert len(topic.slots) == 1
+    assert topic.slots[0].hour == 8
+    assert topic.slots[0].days == []
+
+    by_id = await store.get_topic(TEST_USER_ID, topic.id)
+    assert by_id is not None and len(by_id.slots) == 1 and by_id.slots[0].hour == 8
 
     topics = await store.get_topics(TEST_USER_ID)
     assert any(t.id == topic.id for t in topics)
@@ -84,7 +89,7 @@ async def test_seen_and_dedup() -> None:
         TEST_USER_ID,
         name="Archaeology",
         sources=["LiveScience"],
-        frequency="weekly",
+        slots=[Slot(days=[0], hour=8, every_n_weeks=1)],
     )
 
     articles = [

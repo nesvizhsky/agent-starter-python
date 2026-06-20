@@ -28,11 +28,6 @@ def _topic(**kwargs: object) -> Topic:
         telegram_id=1,
         name="Test Topic",
         description=None,
-        frequency="daily",
-        send_hour=8,
-        send_minute=0,
-        send_dow=0,
-        schedule_days="",
         timezone="UTC",
         paused=False,
         sources=["BBC", "Reuters"],
@@ -136,7 +131,6 @@ async def test_gather_returns_articles() -> None:
     topic = _topic(
         name="archaeology news",
         sources=["Archaeology Magazine", "LiveScience"],
-        frequency="weekly",
     )
     articles = await gather(topic)
 
@@ -158,7 +152,6 @@ async def test_gather_returns_articles() -> None:
         name="archaeology news",
         sources=["Archaeology Magazine", "LiveScience"],
         excluded_sources=["LiveScience"],
-        frequency="weekly",
     )
     articles2 = await gather(topic_with_exclusion)
     source_labels = {a.source for a in articles2}

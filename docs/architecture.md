@@ -51,8 +51,8 @@ CREATE TABLE elephant_topics (
     telegram_id      BIGINT NOT NULL REFERENCES elephant_users ON DELETE CASCADE,
     name             TEXT NOT NULL,
     description      TEXT,
-    frequency        TEXT NOT NULL DEFAULT 'daily',   -- 'daily'|'twice_daily'|'weekly'
-    send_hour        INT  NOT NULL DEFAULT 8,          -- local hour (0-23)
+    -- Scheduling itself lives in elephant_topic_slots (below), not on this row —
+    -- a topic can have any number of independent checkup times.
     timezone         TEXT NOT NULL DEFAULT 'UTC',
     paused           BOOL NOT NULL DEFAULT false,
     sources          TEXT[] NOT NULL DEFAULT '{}',     -- tracked source names/URLs
@@ -66,6 +66,23 @@ CREATE TABLE elephant_topics (
 );
 
 CREATE INDEX ON elephant_topics (telegram_id);
+
+-- One row per recurring checkup. A topic can have any number of these —
+-- e.g. two "every day" slots at different times (twice daily, any gap), or
+-- "Mon 12:00" + "Thu 10:00" as two independent single-day slots. Each slot
+-- tracks its own last_sent_at so slots never interfere with each other.
+CREATE TABLE elephant_topic_slots (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    topic_id       UUID NOT NULL REFERENCES elephant_topics ON DELETE CASCADE,
+    days           TEXT NOT NULL DEFAULT '',  -- comma-separated 0=Mon..6=Sun; '' = every day
+    hour           INT  NOT NULL,
+    minute         INT  NOT NULL DEFAULT 0,
+    every_n_weeks  INT  NOT NULL DEFAULT 0,   -- 0 = every matching day; >=1 = once every N weeks
+    last_sent_at   TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX ON elephant_topic_slots (topic_id);
 
 -- Every article sent to a user on a topic. Used for freshness filtering.
 CREATE TABLE elephant_seen (
@@ -111,14 +128,17 @@ Runs once per (user, topic) per cron tick when a topic is due.
 
 ```
 jobs.run_due_digests(bot)
-  └─ for each topic where is_due(topic):
+  └─ for each topic, for each slot in due_slots(topic, now_local):
+       # lookback_hours is derived from the firing slot's own cadence —
+       # an every-day slot, a weekday-restricted slot, or a week-gated slot
+       # each compute a different, correct window (see jobs._lookback_hours).
 
-       articles  = await research.gather(topic)
+       articles  = await research.gather(topic, lookback_hours)
                    # research() call per source in topic.sources (excluded_sources skipped)
                    # + one general call for the topic
                    # returns list[Article(url, headline, source, published_at, summary)]
 
-       fresh     = await dedup.filter(topic.id, articles, lookback_days)
+       fresh     = await dedup.filter_seen(topic.id, articles, lookback_days)
                    # pass 1 — drop URLs already in elephant_seen for this topic
                    # pass 2 — embed remaining; drop if cosine_similarity to any
                    #          stored embedding > 0.85 (pgvector <=> operator)
@@ -235,7 +255,9 @@ All DB access. Key functions:
 get_or_create_user(telegram_id, first_name, username) -> User
 get_topics(telegram_id) -> list[Topic]
 get_topic_by_name(telegram_id, name) -> Topic | None
-create_topic(telegram_id, *, name, frequency, sources, ...) -> Topic
+create_topic(telegram_id, *, name, slots: list[Slot], sources, ...) -> Topic
+replace_slots(topic_id, slots: list[Slot]) -> None
+stamp_slot_sent(slot_id) -> None
 update_topic(topic_id, **fields) -> None
 get_seen_urls(topic_id) -> set[str]
 get_seen_embeddings(topic_id, since_days: int) -> list[list[float]]
@@ -253,8 +275,8 @@ All python-telegram-bot handlers.
 Commands:
 ```
 /start                      → welcome, upsert user
-/add_topic                  → ConversationHandler: name → frequency → sources → confirm
-/topics                     → list topics (name, frequency, paused/active, last sent)
+/add_topic                  → ConversationHandler: name → slot(s) (looped) → sources → confirm
+/topics                     → list topics (name, schedule, paused/active, last sent)
 /pause <name>               → pause updates
 /resume <name>              → resume updates
 /check <name>               → immediate digest, stamps last_sent_at
@@ -276,8 +298,10 @@ intent — feedback, question, command in natural language — and routes accord
 async def run_due_digests(bot: Bot) -> int: ...
 async def run_due_syntheses(bot: Bot) -> int: ...
 ```
-`is_due()` mirrors inspiration_bot: local time from timezone, compare to send_hour,
-check `last_sent_at` not already today, check cadence. Idempotent — double tick safe.
+`due_slots(topic, now_local)` checks each of a topic's slots independently: local
+time from timezone, hour + weekday match, and that slot's own `last_sent_at` —
+not a single per-topic timestamp, so e.g. a 10:00 slot firing doesn't block a
+19:00 slot on the same topic later that day. Idempotent — double tick safe.
 Failures per user are caught and logged; one user's error doesn't block others.
 
 ### `app.py`

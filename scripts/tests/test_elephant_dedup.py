@@ -19,7 +19,7 @@ import pytest
 from agent.services import db
 from elephant import store
 from elephant.dedup import SIMILARITY_THRESHOLD, filter_seen
-from elephant.models import Article
+from elephant.models import Article, Slot
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -40,6 +40,10 @@ def _article(
     return Article(
         url=url, headline=headline, source=source, published_at=published_at, summary=headline
     )
+
+
+def _slot(hour: int = 8) -> Slot:
+    return Slot(days=[], hour=hour)
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +89,7 @@ def test_empty_input_returns_empty() -> None:
     import asyncio
 
     result = (
-        asyncio.get_event_loop().run_until_complete(filter_seen(uuid4(), [], "daily"))
+        asyncio.get_event_loop().run_until_complete(filter_seen(uuid4(), [], 2))
         if False
         else ([], [])
     )  # guard: don't actually call (no DB in offline tests)
@@ -116,7 +120,7 @@ async def test_url_dedup_removes_seen_articles() -> None:
     """Articles whose URL was already stored should be filtered out."""
     await store.get_or_create_user(TEST_USER_ID, "Test", None)
     topic = await store.create_topic(
-        TEST_USER_ID, name="Dedup Test", sources=["BBC"], frequency="daily"
+        TEST_USER_ID, name="Dedup Test", sources=["BBC"], slots=[_slot()]
     )
 
     seen = _article("https://bbc.com/seen", "Already seen")
@@ -125,7 +129,7 @@ async def test_url_dedup_removes_seen_articles() -> None:
     # Store the "seen" article with a dummy embedding
     await store.record_seen(topic.id, [seen], [[0.5] * 1024])
 
-    result_articles, result_embeddings = await filter_seen(topic.id, [seen, fresh], "daily")
+    result_articles, result_embeddings = await filter_seen(topic.id, [seen, fresh], 2)
 
     urls = {a.url for a in result_articles}
     assert "https://bbc.com/seen" not in urls
@@ -138,7 +142,7 @@ async def test_semantic_dedup_removes_same_story() -> None:
     """Two articles about the same story should deduplicate even with different URLs."""
     await store.get_or_create_user(TEST_USER_ID, "Test", None)
     topic = await store.create_topic(
-        TEST_USER_ID, name="Semantic Test", sources=["Reuters"], frequency="daily"
+        TEST_USER_ID, name="Semantic Test", sources=["Reuters"], slots=[_slot()]
     )
 
     # Store an article with a REAL embedding (computed from actual text)
@@ -160,7 +164,7 @@ async def test_semantic_dedup_removes_same_story() -> None:
         "Ancient Egyptian bakery discovered in Luxor",
     )
 
-    fresh, embeddings = await filter_seen(topic.id, [near_dup, different], "daily")
+    fresh, embeddings = await filter_seen(topic.id, [near_dup, different], 2)
     urls = {a.url for a in fresh}
 
     assert "https://bbc.com/different" in urls, "Different article should survive"
@@ -175,12 +179,12 @@ async def test_nothing_seen_returns_all_articles() -> None:
     """With an empty seen table, all articles should pass through."""
     await store.get_or_create_user(TEST_USER_ID, "Test", None)
     topic = await store.create_topic(
-        TEST_USER_ID, name="Empty Test", sources=["CNN"], frequency="daily"
+        TEST_USER_ID, name="Empty Test", sources=["CNN"], slots=[_slot()]
     )
     articles = [
         _article("https://cnn.com/a1", "Story one"),
         _article("https://cnn.com/a2", "Story two"),
     ]
-    fresh, embeddings = await filter_seen(topic.id, articles, "daily")
+    fresh, embeddings = await filter_seen(topic.id, articles, 2)
     assert len(fresh) == 2
     assert len(embeddings) == 2

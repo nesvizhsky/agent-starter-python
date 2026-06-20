@@ -283,3 +283,31 @@ just starved of real data. Confirmed end-to-end against a real article that had 
 into an earlier test digest: it resolved to its true date (3 months old) and would now
 be dropped by the existing lookback filter. Fails open (stays `None`, today's behavior)
 for the minority of pages with no date signal — mostly section front pages, not articles.
+
+## 2026-06-20 23:10 — Generalized scheduling from one frequency+time to independent slots
+User feedback: picking "twice daily" only ever asked for one time, then silently
+assumed the second send was exactly 12h later — typing "10:00 and 19:00" just got
+parsed down to 10:00 and the 19:00 part was discarded. Worse: that 12h assumption
+was baked into `jobs.is_due()`, so even fixing the input parsing wouldn't have let
+users pick arbitrary gaps. Discussed it with the user — rather than bolt on a
+second send_hour column, generalized the whole model: a topic now has a list of
+independent `Slot`s (days-or-every-day, time, every_n_weeks), each tracking its
+own `last_sent_at` in a new `elephant_topic_slots` table. Migration backfills
+every existing topic's single frequency+time into the equivalent slot(s) — old
+behavior preserved exactly, no manual fixes needed.
+
+This subsumes daily/twice_daily/weekdays/mwf/tuth/custom_days/weekly/biweekly into
+one mechanism (every_n_weeks=0 means "fire every matching day", >=1 means "once
+every N weeks") and, as a side effect, finally supports the two concrete cases the
+user described: arbitrary-gap twice-daily (two every-day slots, any two times) and
+mixed schedules like "Mon 12:00 + Thu 10:00" (two single-day slots). The old
+`_LOOKBACK`/`_RECENCY_FILTER` tables keyed by frequency string are gone too —
+`jobs._lookback_hours()` derives the right window from whichever slot fired,
+walking back to the slot's actual previous occurrence instead of guessing a fixed
+gap. bot.py's UI keeps the same preset buttons (Every day, Mon-Fri, Once a week,
+...); each preset now just builds one slot, and a new "Add another checkup time?"
+prompt loops back to build more.
+
+Old `frequency`/`send_hour`/`send_minute`/`send_dow`/`schedule_days` columns on
+elephant_topics are left in place but unused, rather than dropped — no need for a
+destructive migration when leaving them inert costs nothing.
