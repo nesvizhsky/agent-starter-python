@@ -19,6 +19,7 @@ from telegram import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    MenuButtonCommands,
     Message,
     Update,
 )
@@ -1902,6 +1903,10 @@ async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
         ],
         language_code="ru",
     )
+    # Without this, Telegram defaults the menu button to a generic attachment-style
+    # icon until the user starts typing "/". Forcing MenuButtonCommands makes it
+    # always show the commands list.
+    await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
 
 def build_application() -> Application:  # type: ignore[type-arg]
