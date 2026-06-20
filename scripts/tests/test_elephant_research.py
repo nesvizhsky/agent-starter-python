@@ -15,7 +15,7 @@ import pytest
 
 from agent.services.llm import Research, Source
 from elephant.models import Topic
-from elephant.research import _headline_from_url, _parse, _source_from_url, gather
+from elephant.research import _headline_from_url, _is_hub_page, _parse, _source_from_url, gather
 
 # ---------------------------------------------------------------------------
 # Offline: parsing helpers
@@ -105,6 +105,31 @@ def test_parse_marks_general_query_articles() -> None:
     )
     articles = _parse(result, is_general_query=True)
     assert articles[0].is_general_query is True
+
+
+def test_is_hub_page_catches_known_shapes() -> None:
+    hub_headlines = [
+        "Ancient Civilizations News",
+        "Archaeology News - Phys.org",
+        "May/June 2026 - Archaeology Magazine",
+        "June 2026 – Explorator",
+        "Archaeology and anthropology",
+        "Archaeology",
+        "Stonehenge: history, location, and meaning of the megalithic monument",
+    ]
+    for headline in hub_headlines:
+        assert _is_hub_page(headline), f"expected hub page: {headline!r}"
+
+
+def test_is_hub_page_keeps_real_headlines() -> None:
+    real_headlines = [
+        "New discovery may have been Stonehenge prototype",
+        "Celtic 'princely tomb' discovered near Bad Camberg in major breakthrough",
+        "Russia fires missiles at Kyiv",
+        "Ukraine ceasefire talks stall",
+    ]
+    for headline in real_headlines:
+        assert not _is_hub_page(headline), f"expected real headline: {headline!r}"
 
 
 def test_gather_skips_excluded_sources() -> None:

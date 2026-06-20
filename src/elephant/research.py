@@ -80,6 +80,11 @@ _BLOCKED_GENERAL_DOMAINS: frozenset[str] = frozenset(
         "unrot.com",
         "verdantix.com",
         "dentro.de",
+        # Encyclopedias/reference sites: background material, never news.
+        "britannica.com",
+        "wikipedia.org",
+        "dictionary.com",
+        "merriam-webster.com",
     }
 )
 
@@ -92,6 +97,7 @@ _ROUNDUP_RE = re.compile(
     r"(weekly|daily|monthly)\s+(roundup|digest|recap|summary|wrap.?up)|"
     r"\bai\s+(this|last)\s+week\b|"
     r"\bthe\s+week\s+in\b|"
+    r"\bnews\s+of\s+the\s+week\b|"
     r"\byear\s+in\s+review\b|"
     r"\bwhat\s+to\s+expect\b|"
     r"\beverything\s+you\s+need\s+to\s+know\b|"
@@ -99,6 +105,38 @@ _ROUNDUP_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+# Headlines that are hub/category index pages or reference overviews rather than
+# a report of one specific happening — e.g. "Archaeology News", "Archaeology and
+# anthropology", "May/June 2026 - Archaeology Magazine", "Stonehenge: history,
+# location, and meaning of...". Backstop for domains we don't otherwise block.
+# Checked as several narrow patterns (not one combined regex) because each shape
+# needs different anchoring — a bare "X News" must match end-to-end, but the
+# "Title: history, location... of <object>" shape has free text after "of".
+_HUB_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^[\w&',\s]{1,40}\s+news(\s*[-–]\s*[\w.\s]+)?$", re.IGNORECASE),
+    re.compile(r"^[\w&',\s]{1,40}\s+magazine$", re.IGNORECASE),
+    re.compile(
+        r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*(/[a-z]+)?"
+        r"\s+\d{4}\s*[-–]\s*[\w.\s]+$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^\w+\s+and\s+\w+$", re.IGNORECASE),  # bare "X and Y" category label
+    re.compile(
+        r":\s+(history|location|meaning|definition|overview|facts|significance|guide)"
+        r"(\s*,?\s*(and\s+)?(history|location|meaning|definition|overview|facts|significance|guide))*"  # noqa: E501
+        r"\s+(of|to|about)\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _is_hub_page(headline: str) -> bool:
+    """A bare category label (≤2 words) or one of the _HUB_PATTERNS shapes."""
+    if len(headline.split()) <= 2:
+        return True
+    return any(p.search(headline) for p in _HUB_PATTERNS)
+
 
 _expander: Agent[None, str] = Agent(
     build_model("fast"),
@@ -193,6 +231,10 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
                 continue
             if _ROUNDUP_RE.search(article.headline):
                 logger.info("dropped roundup/listicle: {!r}", article.headline)
+                dropped += 1
+                continue
+            if _is_hub_page(article.headline):
+                logger.info("dropped hub/reference page: {!r}", article.headline)
                 dropped += 1
                 continue
             seen.add(article.url)

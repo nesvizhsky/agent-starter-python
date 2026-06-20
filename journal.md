@@ -311,3 +311,27 @@ prompt loops back to build more.
 Old `frequency`/`send_hour`/`send_minute`/`send_dow`/`schedule_days` columns on
 elephant_topics are left in place but unused, rather than dropped — no need for a
 destructive migration when leaving them inert costs nothing.
+
+## 2026-06-21 00:35 — Stopped digests fabricating "stories" from reference/hub pages
+User caught a digest presenting a Britannica "Stonehenge: history, location, and
+meaning..." overview as a dated news story (event_date hallucinated as "Jun 20").
+Traced it: not from article_dates.py (Britannica 403s our fetch, so published_at
+correctly stayed None) — it's perspectives.cluster()'s LLM ignoring its own Rule 3
+("only create stories for things that SPECIFICALLY HAPPENED") for generic reference
+material. Live-reran research.gather() for the exact topic and found Perplexity's
+general query routinely mixes real articles with encyclopedia entries, magazine
+issue listings, and category hub pages (AP News' archaeology hub, sci.news's
+category page, newsletter front pages) — none of which match the existing
+_ROUNDUP_RE (that only catches "Top 10 / weekly digest" phrasing).
+
+Fixed with two layers: (1) research.py now blocks encyclopedia/reference domains
+outright (britannica.com, wikipedia.org, ...) for the general query, and adds
+_is_hub_page() — a handful of narrow, separately-anchored patterns (bare "X News",
+"X Magazine", month/year issue listings, bare "X and Y" category labels, "Title:
+history/location/meaning... of Y" overviews) plus a ≤2-word bare-category check.
+(2) perspectives.py's clustering prompt gained an explicit instruction to discard
+reference material rather than inventing an event/date for it, as a catch-all for
+shapes the regex won't generalize to. Verified live: re-ran the full pipeline for
+the same topic — regex caught the common shapes, and the LLM correctly discarded
+the rest (newsletter front pages, an author-bio page) without fabricating stories,
+producing only the 2 real findings that were actually new.
