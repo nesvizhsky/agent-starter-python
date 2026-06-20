@@ -355,3 +355,23 @@ and forbid mentioning dates, months, source names/types. Verified across
 three live calls: all came back flat and accurate ("No new reportable events
 were found..."), no invented specifics. Added a regression test asserting
 month names and "aggregator" never appear in the no-news output.
+
+## 2026-06-21 01:05 — Translate contradiction quotes, keep the original tap-to-reveal
+User feedback: Russian digests left contradiction quotes (⚡ Source A: "...") in
+English on purpose — to avoid distorting the original wording — but that left
+non-English-speaking readers unable to read the very quotes the contradiction
+is built on. Their suggestion: translate it, but keep the original available.
+
+Telegram's HTML mode supports <tg-spoiler> (tap-to-reveal) — fits this exactly.
+digest.py's prompt now asks for the claim translated into the digest language,
+with the verbatim original right after inside a spoiler tag, so nothing is lost
+and nothing clutters the line. Tested live: a Russian digest now shows the
+translated quote with the English original behind a tap; an English digest
+quoting an English source shows just the quote once.
+
+The model didn't reliably follow "skip the spoiler if it'd be identical to the
+visible text" on its own (an English digest of an English quote still got a
+redundant tap-to-reveal of the same text) — added a deterministic post-process
+step (_strip_redundant_spoilers) that collapses any spoiler whose hidden text
+case-insensitively matches the visible text, rather than trusting the model's
+judgment on something checkable in code.

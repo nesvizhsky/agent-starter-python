@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from elephant.digest import DigestOutput, _format_prompt, generate
+from elephant.digest import DigestOutput, _format_prompt, _strip_redundant_spoilers, generate
 from elephant.models import SourceView, Story
 
 
@@ -77,6 +77,20 @@ def test_format_prompt_no_signals_omits_signals_line() -> None:
 def test_digest_output_model_defaults() -> None:
     d = DigestOutput(main="Hello world")
     assert d.overflow is None
+
+
+def test_strip_redundant_spoilers_removes_identical_quote() -> None:
+    text = '⚡ BBC: "At least three civilians were killed" <tg-spoiler>original: "At least three civilians were killed"</tg-spoiler>'  # noqa: E501
+    result = _strip_redundant_spoilers(text)
+    assert "<tg-spoiler>" not in result
+    assert result == '⚡ BBC: "At least three civilians were killed"'
+
+
+def test_strip_redundant_spoilers_keeps_real_translation() -> None:
+    text = '⚡ BBC: «Погибли не менее трёх мирных жителей» <tg-spoiler>original: "At least three civilians were killed"</tg-spoiler>'  # noqa: E501
+    result = _strip_redundant_spoilers(text)
+    assert "<tg-spoiler>" in result
+    assert "At least three civilians were killed" in result
 
 
 # ---------------------------------------------------------------------------

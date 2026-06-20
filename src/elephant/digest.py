@@ -10,6 +10,7 @@ overflow is stored in the DB and surfaced on /more.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
@@ -74,15 +75,23 @@ def _system_prompt(ctx: RunContext[_Deps]) -> str:
         "[One sentence: the key fact. What, who, where.]\n"
         '• <a href="URL"><i>Source A</i></a> — [what they specifically said/claimed]\n'
         '• <a href="URL"><i>Source B</i></a> — [their framing] 🚩 <i>state framing</i>\n'
-        '⚡ Source A: "exact claim"  ← include only if contradictions are listed for this story\n'
-        '   Source B: "conflicting claim"\n'
+        f'⚡ Source A: "[claim translated into {lang}]" <tg-spoiler>original: "[claim exactly '
+        'as given]"</tg-spoiler>  ← include only if contradictions are listed for this story\n'
+        f'   Source B: "[claim translated into {lang}]" <tg-spoiler>original: "[claim exactly '
+        'as given]"</tg-spoiler>\n'
         "[blank line between stories]\n\n"
         "Signals — add inline, sparingly, only when the language clearly warrants it:\n"
         "  🚩 <i>state framing</i>  — loaded or official propaganda language\n\n"
         "Contradictions — include after the source bullets, only if listed for that story:\n"
-        '  ⚡ Source A: "exact claim"\n'
-        '     Source B: "conflicting claim"\n'
-        "  Use the exact claims as given. Do not rephrase.\n\n"
+        f'  ⚡ Source A: "[claim, translated into {lang}]" <tg-spoiler>original: "[claim exactly '
+        'as given]"</tg-spoiler>\n'
+        f'     Source B: "[claim, translated into {lang}]" <tg-spoiler>original: "[claim exactly '
+        'as given]"</tg-spoiler>\n'
+        f"  Translate each claim into {lang} so the reader can follow it, but ALWAYS also "
+        "include the claim exactly as given — verbatim, unmodified, never paraphrased or "
+        "dropped — inside a <tg-spoiler> tag right after, so it's tap-to-reveal rather than "
+        f"cluttering the line. If the claim as given is already in {lang}, omit the "
+        "<tg-spoiler> part entirely since there's nothing extra to show.\n\n"
         "RULES:\n"
         "1. Headlines MUST be sentence case: lowercase except the first word and proper nouns.\n"
         "2. Present stories in the order given — most important (importance=1) first.\n"
@@ -117,12 +126,34 @@ async def generate(
     prompt = _format_prompt(stories) if stories else _NO_NEWS_PROMPT
     deps = _Deps(feedback_notes=feedback_notes, today=today, language=language)
     result = await _agent.run(prompt, deps=deps)
-    return result.output
+    output = result.output
+    output.main = _strip_redundant_spoilers(output.main)
+    if output.overflow:
+        output.overflow = _strip_redundant_spoilers(output.overflow)
+    return output
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Matches: "<claim>" <tg-spoiler>original: "<claim>"</tg-spoiler>
+# The LLM is told to add the spoiler only when the visible claim was translated
+# from a different language, but doesn't reliably skip it when they're already
+# identical (e.g. an English digest quoting an English source) — strip those
+# redundant reveals deterministically rather than trust the model's judgment.
+_REDUNDANT_SPOILER_RE = re.compile(r'"([^"]+)"\s*<tg-spoiler>original:\s*"([^"]+)"</tg-spoiler>')
+
+
+def _strip_redundant_spoilers(text: str) -> str:
+    def _collapse(m: re.Match[str]) -> str:
+        visible, original = m.group(1), m.group(2)
+        if visible.strip().casefold() == original.strip().casefold():
+            return f'"{visible}"'
+        return m.group(0)
+
+    return _REDUNDANT_SPOILER_RE.sub(_collapse, text)
+
 
 _NO_NEWS_PROMPT = (
     "No article in this check qualified as a specific, reportable news event for this topic. "
