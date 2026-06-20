@@ -114,7 +114,7 @@ _SCHED_TYPE_LABELS: dict[str, str] = {
 # "topics_header" uses {n} as the count placeholder.
 _UI: dict[str, str] = {
     # Messages
-    "fetch_status": "⏳ *Fetching digest for {name}…*\n_This takes 1–2 minutes. Other commands won't respond until it's done._",  # noqa: E501
+    "fetch_status": "⏳ *Fetching digest for {name}…*\n_This takes 1–2 minutes — feel free to keep using me meanwhile._",  # noqa: E501
     "fetch_card": "⏳ _Fetching digest…_",
     "err_generic": "Something went wrong — try again.",
     "err_moment": "Something went wrong — try again in a moment.",
@@ -2103,7 +2103,11 @@ def build_application() -> Application:  # type: ignore[type-arg]
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set.")
 
-    app = ApplicationBuilder().token(token).post_init(_post_init).build()
+    # concurrent_updates: without this, PTB processes updates one at a time off its
+    # internal queue — a slow digest job (1-2 min of LLM/search calls) would block the
+    # bot from handling anything else, for any user, until it finishes. With it, each
+    # update runs as its own task so the bot stays responsive while one is in flight.
+    app = ApplicationBuilder().token(token).post_init(_post_init).concurrent_updates(True).build()
 
     # One ConversationHandler handles both /add_topic and /schedule
     topic_conv = ConversationHandler(

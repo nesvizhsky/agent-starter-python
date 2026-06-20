@@ -375,3 +375,23 @@ redundant tap-to-reveal of the same text) — added a deterministic post-process
 step (_strip_redundant_spoilers) that collapses any spoiler whose hidden text
 case-insensitively matches the visible text, rather than trusting the model's
 judgment on something checkable in code.
+
+## 2026-06-21 01:15 — Stopped a slow digest from blocking the whole bot
+User shared a fix from their own bot: don't await long jobs inline — it blocks
+the event loop. Checked our case: the "fetch_status" UI text literally admitted
+"Other commands won't respond until it's done" — a known limitation, never
+actually fixed. Root cause: python-telegram-bot processes updates one at a time
+off its internal queue unless concurrent_updates is enabled, which is exactly
+what was happening on the local/dev polling path. (The production webhook path
+calls ptb.process_update() directly per FastAPI request rather than going
+through PTB's queue, so it was already less affected — but enabling this is
+still the documented correct setting and costs nothing.)
+
+Fix: ApplicationBuilder().concurrent_updates(True) in build_application() — PTB's
+built-in equivalent of "run it as a background task," backed by a worker pool
+(confirmed via app.concurrent_updates == 256) instead of a single serial queue.
+PTB's ConversationHandler still locks per-conversation internally, so the
+add_topic/schedule flow can't race with itself — only *unrelated* updates (other
+users, other commands from the same user) now run concurrently instead of
+queueing behind a slow digest. Updated the now-inaccurate "Other commands won't
+respond" copy to "feel free to keep using me meanwhile."
