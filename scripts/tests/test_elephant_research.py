@@ -1,10 +1,10 @@
-"""Tests for disputatio/research.py.
+"""Tests for elephant/research.py.
 
 Offline tests cover parsing logic without hitting any API.
 Integration test calls real Perplexity (costs a little, ~$0.01).
 
-    uv run pytest scripts/tests/test_disputatio_research.py            # offline only
-    uv run pytest -m integration scripts/tests/test_disputatio_research.py  # live too
+    uv run pytest scripts/tests/test_elephant_research.py            # offline only
+    uv run pytest -m integration scripts/tests/test_elephant_research.py  # live too
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from uuid import uuid4
 import pytest
 
 from agent.services.llm import Research, Source
-from disputatio.models import Topic
-from disputatio.research import _headline_from_url, _parse, _source_from_url, gather
+from elephant.models import Topic
+from elephant.research import _headline_from_url, _parse, _source_from_url, gather
 
 # ---------------------------------------------------------------------------
 # Offline: parsing helpers

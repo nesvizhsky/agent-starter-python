@@ -31,7 +31,7 @@ from pydantic_ai import Agent
 
 from agent.services.llm import Research, build_model
 from agent.services.llm import research as _research
-from disputatio.models import Article, Topic
+from elephant.models import Article, Topic
 
 _LOOKBACK: dict[str, str] = {
     "daily": "48 hours",

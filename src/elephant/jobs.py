@@ -1,4 +1,4 @@
-"""Cron job runners for Disputatio.
+"""Cron job runners for Eat the Elephant.
 
 `is_due` is a pure function (unit-testable offline).
 `run_due_digests` loops all active topics, checks due-ness,
@@ -14,8 +14,8 @@ from loguru import logger
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 
-from disputatio import dedup, digest, perspectives, propaganda, research, store
-from disputatio.models import Topic
+from elephant import dedup, digest, perspectives, propaganda, research, store
+from elephant.models import Topic
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -197,7 +197,7 @@ async def _run_digest(topic: Topic, bot: Bot) -> None:
 async def run_due_digests(bot: Bot, *, force: bool = False) -> int:
     """Run the digest pipeline for every topic that is due now.
 
-    force=True ignores the clock — useful for `disputatio-cron` in dev.
+    force=True ignores the clock — useful for `elephant-cron` in dev.
     Returns the number of digests successfully sent.
     """
     sent = 0

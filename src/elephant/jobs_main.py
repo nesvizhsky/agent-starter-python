@@ -1,6 +1,6 @@
-"""Local entrypoint for `disputatio-cron`: force-run all due digests.
+"""Local entrypoint for `elephant-cron`: force-run all due digests.
 
-    uv run disputatio-cron
+    uv run elephant-cron
 
 Used in dev to trigger the cron pipeline immediately without waiting for the clock.
 """
@@ -14,8 +14,8 @@ from telegram import Bot
 
 from agent.config import get_settings
 from agent.logging_setup import setup_logging
-from disputatio import store
-from disputatio.jobs import run_due_digests
+from elephant import store
+from elephant.jobs import run_due_digests
 
 
 async def _run() -> None:

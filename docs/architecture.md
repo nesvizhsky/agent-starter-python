@@ -8,17 +8,17 @@ Same dev/prod split as the inspiration_bot pattern:
 
 | | **development** | **production** |
 |---|---|---|
-| Bot token | `@yourname_dev_bot` | `@disputatio_bot` |
+| Bot token | `@disputatio_bot` (test bot, name fixed at creation) | `@eatelephant` |
 | Database | dev Neon branch | prod Neon branch |
-| Updates | long polling (`disputatio-bot`) | webhook into FastAPI (`disputatio-serve`) |
-| Cron | `disputatio-cron` run by hand | Railway Cron (hourly) → `POST /cron/tick` |
+| Updates | long polling (`elephant-bot`) | webhook into FastAPI (`elephant-serve`) |
+| Cron | `elephant-cron` run by hand | Railway Cron (hourly) → `POST /cron/tick` |
 
 ## Source layout
 
 ```
 src/
 ├── agent/            # shared services (unchanged): llm, media, storage, db, config
-└── disputatio/       # this project
+└── elephant/       # this project
     ├── store.py          # all DB access, every query scoped by telegram_id via topic FK
     ├── research.py       # gather articles: research() calls per source + topic
     ├── dedup.py          # freshness filter: URL match + semantic similarity
@@ -38,7 +38,7 @@ src/
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- One row per Telegram user who has started the bot.
-CREATE TABLE disputatio_users (
+CREATE TABLE elephant_users (
     telegram_id  BIGINT PRIMARY KEY,
     first_name   TEXT NOT NULL,
     username     TEXT,
@@ -46,9 +46,9 @@ CREATE TABLE disputatio_users (
 );
 
 -- One row per topic per user.
-CREATE TABLE disputatio_topics (
+CREATE TABLE elephant_topics (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    telegram_id      BIGINT NOT NULL REFERENCES disputatio_users ON DELETE CASCADE,
+    telegram_id      BIGINT NOT NULL REFERENCES elephant_users ON DELETE CASCADE,
     name             TEXT NOT NULL,
     description      TEXT,
     frequency        TEXT NOT NULL DEFAULT 'daily',   -- 'daily'|'twice_daily'|'weekly'
@@ -65,12 +65,12 @@ CREATE TABLE disputatio_topics (
     last_synthesis_at TIMESTAMPTZ
 );
 
-CREATE INDEX ON disputatio_topics (telegram_id);
+CREATE INDEX ON elephant_topics (telegram_id);
 
 -- Every article sent to a user on a topic. Used for freshness filtering.
-CREATE TABLE disputatio_seen (
+CREATE TABLE elephant_seen (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    topic_id          UUID NOT NULL REFERENCES disputatio_topics ON DELETE CASCADE,
+    topic_id          UUID NOT NULL REFERENCES elephant_topics ON DELETE CASCADE,
     article_url       TEXT NOT NULL,
     headline          TEXT NOT NULL,
     content_embedding vector(1024),    -- embed(headline + summary), for semantic dedup
@@ -78,27 +78,27 @@ CREATE TABLE disputatio_seen (
     seen_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX ON disputatio_seen (topic_id);
-CREATE INDEX ON disputatio_seen (topic_id, article_url);
+CREATE INDEX ON elephant_seen (topic_id);
+CREATE INDEX ON elephant_seen (topic_id, article_url);
 
 -- Every digest sent, kept for weekly synthesis.
-CREATE TABLE disputatio_digests (
+CREATE TABLE elephant_digests (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    topic_id    UUID    NOT NULL REFERENCES disputatio_topics ON DELETE CASCADE,
+    topic_id    UUID    NOT NULL REFERENCES elephant_topics ON DELETE CASCADE,
     telegram_id BIGINT  NOT NULL,
     content     TEXT    NOT NULL,
     persona     TEXT    NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX ON disputatio_digests (topic_id, created_at DESC);
+CREATE INDEX ON elephant_digests (topic_id, created_at DESC);
 
 -- Feedback signals: quick taps and extended corrections.
-CREATE TABLE disputatio_feedback (
+CREATE TABLE elephant_feedback (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     telegram_id  BIGINT NOT NULL,
-    topic_id     UUID REFERENCES disputatio_topics ON DELETE SET NULL,
-    digest_id    UUID REFERENCES disputatio_digests ON DELETE SET NULL,
+    topic_id     UUID REFERENCES elephant_topics ON DELETE SET NULL,
+    digest_id    UUID REFERENCES elephant_digests ON DELETE SET NULL,
     signal       TEXT,   -- 'good'|'too_shallow'|'too_long'|'already_knew'|'wrong_persona'
     note         TEXT,   -- extended free-text correction
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -119,7 +119,7 @@ jobs.run_due_digests(bot)
                    # returns list[Article(url, headline, source, published_at, summary)]
 
        fresh     = await dedup.filter(topic.id, articles, lookback_days)
-                   # pass 1 — drop URLs already in disputatio_seen for this topic
+                   # pass 1 — drop URLs already in elephant_seen for this topic
                    # pass 2 — embed remaining; drop if cosine_similarity to any
                    #          stored embedding > 0.85 (pgvector <=> operator)
                    # pass 3 — drop articles older than lookback window
@@ -237,7 +237,7 @@ Commands:
 
 Inline keyboard on each digest:
 `👍 good` · `📚 too shallow` · `📖 too long` · `🔁 already knew` · `🎭 wrong persona`
-Tapping one saves to `disputatio_feedback` and offers extended correction if negative.
+Tapping one saves to `elephant_feedback` and offers extended correction if negative.
 
 Free text outside a conversation: dispatcher agent (`build_model("fast")`) detects
 intent — feedback, question, command in natural language — and routes accordingly.
@@ -270,9 +270,9 @@ FastAPI. Lifespan: init PTB + apply migrations + register webhook (if `PUBLIC_UR
 ## Entrypoints (pyproject.toml)
 
 ```
-disputatio-bot    → polling mode (dev)
-disputatio-cron   → run due digests + syntheses once, then exit (dev/test)
-disputatio-serve  → FastAPI app (prod)
+elephant-bot    → polling mode (dev)
+elephant-cron   → run due digests + syntheses once, then exit (dev/test)
+elephant-serve  → FastAPI app (prod)
 ```
 
 ## Build order

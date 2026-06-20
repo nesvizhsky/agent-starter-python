@@ -1,4 +1,4 @@
-"""Shared Pydantic models for Disputatio.
+"""Shared Pydantic models for Eat the Elephant.
 
 These mirror the DB schema and are passed between modules.
 Article is the research pipeline's unit; everything else maps to a DB table.

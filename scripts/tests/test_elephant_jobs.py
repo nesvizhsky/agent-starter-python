@@ -1,8 +1,8 @@
-"""Tests for disputatio/jobs.py.
+"""Tests for elephant/jobs.py.
 
 Offline tests cover the pure is_due() logic. No DB, no LLM, no Telegram.
 
-    uv run pytest scripts/tests/test_disputatio_jobs.py
+    uv run pytest scripts/tests/test_elephant_jobs.py
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from disputatio.jobs import is_due
-from disputatio.models import Topic
+from elephant.jobs import is_due
+from elephant.models import Topic
 
 
 def _topic(

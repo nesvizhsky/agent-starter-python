@@ -1,18 +1,18 @@
-"""Tests for disputatio/digest.py.
+"""Tests for elephant/digest.py.
 
 Offline tests cover prompt formatting.
 Integration tests fire a real LLM call to verify digest generation.
 
-    uv run pytest scripts/tests/test_disputatio_digest.py              # offline
-    uv run pytest -m integration scripts/tests/test_disputatio_digest.py
+    uv run pytest scripts/tests/test_elephant_digest.py              # offline
+    uv run pytest -m integration scripts/tests/test_elephant_digest.py
 """
 
 from __future__ import annotations
 
 import pytest
 
-from disputatio.digest import DigestOutput, _format_prompt, generate
-from disputatio.models import SourceView, Story
+from elephant.digest import DigestOutput, _format_prompt, generate
+from elephant.models import SourceView, Story
 
 
 def _story(headline: str, *views: tuple[str, str, str, list[str]]) -> Story:

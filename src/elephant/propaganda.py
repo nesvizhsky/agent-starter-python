@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from agent.services.llm import build_model
-from disputatio.models import SourceView, Story  # noqa: F401  (SourceView used in type hints)
+from elephant.models import SourceView, Story  # noqa: F401  (SourceView used in type hints)
 
 # ---------------------------------------------------------------------------
 # Output model (intermediate — merged back into Story.source_views)

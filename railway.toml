@@ -1,4 +1,4 @@
-# Deploy config for Disputatio.
+# Deploy config for Eat the Elephant.
 # `fastapi run` reads the PORT env var Railway injects; no --port needed.
 [deploy]
-startCommand = "fastapi run src/disputatio/app.py"
+startCommand = "fastapi run src/elephant/app.py"

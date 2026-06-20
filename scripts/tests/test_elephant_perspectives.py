@@ -1,18 +1,18 @@
-"""Tests for disputatio/perspectives.py.
+"""Tests for elephant/perspectives.py.
 
 Offline tests cover helpers and the recovery safeguard.
 Integration test fires a real LLM call to verify clustering.
 
-    uv run pytest scripts/tests/test_disputatio_perspectives.py             # offline
-    uv run pytest -m integration scripts/tests/test_disputatio_perspectives.py
+    uv run pytest scripts/tests/test_elephant_perspectives.py             # offline
+    uv run pytest -m integration scripts/tests/test_elephant_perspectives.py
 """
 
 from __future__ import annotations
 
 import pytest
 
-from disputatio.models import Article
-from disputatio.perspectives import _format_prompt, cluster
+from elephant.models import Article
+from elephant.perspectives import _format_prompt, cluster
 
 
 def _article(url: str, headline: str, source: str) -> Article:

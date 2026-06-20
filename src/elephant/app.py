@@ -1,8 +1,8 @@
 """Production entrypoint: FastAPI hosting the Telegram webhook and cron tick.
 
-    uv run fastapi run src/disputatio/app.py   # production (reads $PORT)
+    uv run fastapi run src/elephant/app.py   # production (reads $PORT)
 
-Locally, use polling instead (uv run disputatio-bot); this file is what Railway runs.
+Locally, use polling instead (uv run elephant-bot); this file is what Railway runs.
 
 Two endpoints, both protected by a shared secret:
   POST /telegram/webhook  — Telegram delivers updates (verified by secret header)
@@ -22,8 +22,8 @@ from telegram.ext import Application
 
 from agent.config import get_settings
 from agent.logging_setup import setup_logging
-from disputatio.bot import _post_init, build_application
-from disputatio.jobs import run_due_digests
+from elephant.bot import _post_init, build_application
+from elephant.jobs import run_due_digests
 
 _ptb: Application | None = None  # type: ignore[type-arg]
 
@@ -58,7 +58,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await ptb.shutdown()
 
 
-app = FastAPI(title="Disputatio", lifespan=lifespan)
+app = FastAPI(title="Eat the Elephant", lifespan=lifespan)
 
 
 @app.get("/")
@@ -104,7 +104,7 @@ def main() -> None:
     import uvicorn
 
     setup_logging()
-    uvicorn.run("disputatio.app:app", host="0.0.0.0", port=8000)
+    uvicorn.run("elephant.app:app", host="0.0.0.0", port=8000)
 
 
 if __name__ == "__main__":

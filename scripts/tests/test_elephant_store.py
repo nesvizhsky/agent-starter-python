@@ -1,7 +1,7 @@
-"""Integration tests for disputatio/store.py.
+"""Integration tests for elephant/store.py.
 
 These hit the real Neon database — run with:
-    uv run pytest -m integration scripts/tests/test_disputatio_store.py
+    uv run pytest -m integration scripts/tests/test_elephant_store.py
 
 They clean up after themselves: all test data is deleted in the fixture teardown.
 """
@@ -11,8 +11,8 @@ from collections.abc import AsyncGenerator
 import pytest
 
 from agent.services import db
-from disputatio import store
-from disputatio.models import Article
+from elephant import store
+from elephant.models import Article
 
 TEST_USER_ID = 999_000_001  # unlikely to collide with a real Telegram id
 
@@ -22,14 +22,14 @@ async def _db_session() -> AsyncGenerator[None, None]:  # noqa: PT004
     """Apply migrations once per session; tear down test data and close the pool after all tests."""
     await store.apply_migrations()
     yield
-    await db.execute("DELETE FROM disputatio_users WHERE telegram_id = $1", TEST_USER_ID)
+    await db.execute("DELETE FROM elephant_users WHERE telegram_id = $1", TEST_USER_ID)
     await db.close_pool()
 
 
 @pytest.fixture(autouse=True)
 async def _clean_between_tests() -> AsyncGenerator[None, None]:  # noqa: PT004
     """Delete test data before each test so they don't bleed into each other."""
-    await db.execute("DELETE FROM disputatio_users WHERE telegram_id = $1", TEST_USER_ID)
+    await db.execute("DELETE FROM elephant_users WHERE telegram_id = $1", TEST_USER_ID)
     yield
 
 

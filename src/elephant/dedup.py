@@ -19,8 +19,8 @@ from uuid import UUID
 from loguru import logger
 
 from agent.services.llm import embed
-from disputatio import store
-from disputatio.models import Article
+from elephant import store
+from elephant.models import Article
 
 SIMILARITY_THRESHOLD = 0.85  # cosine similarity above which we treat two articles as the same story
 

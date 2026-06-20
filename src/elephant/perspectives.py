@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from agent.services.llm import build_model
-from disputatio.models import Article, Contradiction, Story
+from elephant.models import Article, Contradiction, Story
 
 # ---------------------------------------------------------------------------
 # Clustering agent

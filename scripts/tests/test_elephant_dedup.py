@@ -1,10 +1,10 @@
-"""Tests for disputatio/dedup.py.
+"""Tests for elephant/dedup.py.
 
 Offline tests cover the URL and date filtering logic with fake data.
 Integration test uses a real DB + real embeddings to verify semantic dedup.
 
-    uv run pytest scripts/tests/test_disputatio_dedup.py              # offline only
-    uv run pytest -m integration scripts/tests/test_disputatio_dedup.py   # live too
+    uv run pytest scripts/tests/test_elephant_dedup.py              # offline only
+    uv run pytest -m integration scripts/tests/test_elephant_dedup.py   # live too
 """
 
 from __future__ import annotations
@@ -17,9 +17,9 @@ from uuid import uuid4
 import pytest
 
 from agent.services import db
-from disputatio import store
-from disputatio.dedup import SIMILARITY_THRESHOLD, filter_seen
-from disputatio.models import Article
+from elephant import store
+from elephant.dedup import SIMILARITY_THRESHOLD, filter_seen
+from elephant.models import Article
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -101,13 +101,13 @@ def test_empty_input_returns_empty() -> None:
 async def _dedup_db_session() -> AsyncGenerator[None, None]:  # noqa: PT004
     await store.apply_migrations()
     yield
-    await db.execute("DELETE FROM disputatio_users WHERE telegram_id = $1", TEST_USER_ID)
+    await db.execute("DELETE FROM elephant_users WHERE telegram_id = $1", TEST_USER_ID)
     await db.close_pool()
 
 
 @pytest.fixture(autouse=True)
 async def _dedup_clean() -> AsyncGenerator[None, None]:  # noqa: PT004
-    await db.execute("DELETE FROM disputatio_users WHERE telegram_id = $1", TEST_USER_ID)
+    await db.execute("DELETE FROM elephant_users WHERE telegram_id = $1", TEST_USER_ID)
     yield
 
 

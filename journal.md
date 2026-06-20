@@ -171,3 +171,42 @@ Replaced the whole `_TR` / `_SCHED_L10N` / `_DOW_LABELS_L10N` etc. stack with:
 
 Trade-off: first time a user sends a command in a new language, there's a small delay for
 the LLM call (~1s). Every request after that is instant. Acceptable for rare language changes.
+
+## 2026-06-19 21:00 — Removed feedback, synthesis, /more, Digest model (~660 lines)
+
+These features were built but never actually used: no user ever clicked a feedback button,
+synthesis was never triggered, /more required overflow state that no longer existed.
+They were adding complexity and dead code paths.
+
+Removed in commit c946ff8:
+- `synthesis.py` deleted entirely
+- `on_feedback`, `cmd_synthesis`, `cmd_more` handlers removed from `bot.py`
+- `record_digest`, `save_feedback`, `append_feedback_note`, `get_recent_digests` removed from `store.py`
+- `Digest` model, `last_synthesis_at`, `pinned_persona` removed from `models.py`
+- `jobs.py` stripped to just `run_due_digests`
+- DB tables (`disputatio_digests`, `disputatio_feedback`) left in place — no destructive migration needed
+
+The `feedback_notes` field on Topic still exists (it's a writable topic field) but there's no longer
+a way to add notes via bot commands. Could be wired to a future feature if ever needed.
+
+Code archived on `archive/abandoned-features` branch in case it's ever needed.
+
+## 2026-06-20 11:30 — Renamed package disputatio -> elephant ("Eat the Elephant")
+
+Repo/package was still called `disputatio` from before the project found its real name and
+bot handle, `@eatelephant`. Renaming everything: package `src/disputatio/` -> `src/elephant/`,
+project name in `pyproject.toml` -> `eat-the-elephant`, CLI entrypoints `disputatio-bot/-cron/-serve`
+-> `elephant-bot/-cron/-serve`, test files, docs, `railway.toml`.
+
+One name deliberately survives: `@disputatio_bot` is the actual Telegram handle of the dev/test
+bot — Telegram bot usernames are effectively fixed once created, so it stays as the literal,
+documented identity of the test bot in `docs/architecture.md`. The real production bot is
+`@eatelephant`, not yet deployed.
+
+Also renamed the live Postgres tables (`disputatio_users/topics/seen/digests/feedback` ->
+`elephant_*`) via a new migration `007_rename_tables.sql` — pure `ALTER TABLE ... RENAME`,
+no data touched. Per the no-edit-applied-migrations rule, migrations 001-006 were left as-is
+(they're historically accurate: that's what actually ran); 007 bridges old names to new.
+Index names created by those old migrations still carry the `disputatio_*` prefix internally
+(Postgres doesn't rename indexes when you rename a table) — cosmetic, invisible anywhere in
+code or docs, not worth the extra renames.

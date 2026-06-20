@@ -1,4 +1,4 @@
-"""All database access for Disputatio.
+"""All database access for Eat the Elephant.
 
 Every function is scoped by telegram_id (directly, or via topic_id FK).
 No raw SQL lives outside this file.
@@ -15,7 +15,7 @@ from pathlib import Path
 from uuid import UUID
 
 from agent.services import db
-from disputatio.models import Article, Topic, User
+from elephant.models import Article, Topic, User
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
@@ -72,7 +72,7 @@ async def get_or_create_user(
 ) -> User:
     row = await db.fetchrow(
         """
-        INSERT INTO disputatio_users (telegram_id, first_name, username)
+        INSERT INTO elephant_users (telegram_id, first_name, username)
         VALUES ($1, $2, $3)
         ON CONFLICT (telegram_id) DO UPDATE
             SET first_name = EXCLUDED.first_name,
@@ -88,7 +88,7 @@ async def get_or_create_user(
 
 async def get_user_language(telegram_id: int) -> str:
     row = await db.fetchrow(
-        "SELECT language FROM disputatio_users WHERE telegram_id = $1",
+        "SELECT language FROM elephant_users WHERE telegram_id = $1",
         telegram_id,
     )
     return str(row["language"]) if row else "English"
@@ -96,7 +96,7 @@ async def get_user_language(telegram_id: int) -> str:
 
 async def set_user_language(telegram_id: int, language: str) -> None:
     await db.execute(
-        "UPDATE disputatio_users SET language = $1 WHERE telegram_id = $2",
+        "UPDATE elephant_users SET language = $1 WHERE telegram_id = $2",
         language,
         telegram_id,
     )
@@ -108,7 +108,7 @@ async def set_topic_display_fields(
     display_description: str | None,
 ) -> None:
     await db.execute(
-        """UPDATE disputatio_topics
+        """UPDATE elephant_topics
            SET display_name = $1, display_description = $2
            WHERE id = $3""",
         display_name,
@@ -124,7 +124,7 @@ async def set_topic_display_fields(
 
 async def get_topics(telegram_id: int) -> list[Topic]:
     rows = await db.fetch(
-        "SELECT * FROM disputatio_topics WHERE telegram_id = $1 ORDER BY created_at",
+        "SELECT * FROM elephant_topics WHERE telegram_id = $1 ORDER BY created_at",
         telegram_id,
     )
     return [_topic(r) for r in rows]
@@ -132,7 +132,7 @@ async def get_topics(telegram_id: int) -> list[Topic]:
 
 async def get_topic(telegram_id: int, topic_id: UUID) -> Topic | None:
     row = await db.fetchrow(
-        "SELECT * FROM disputatio_topics WHERE id = $1 AND telegram_id = $2",
+        "SELECT * FROM elephant_topics WHERE id = $1 AND telegram_id = $2",
         topic_id,
         telegram_id,
     )
@@ -141,7 +141,7 @@ async def get_topic(telegram_id: int, topic_id: UUID) -> Topic | None:
 
 async def get_topic_by_name(telegram_id: int, name: str) -> Topic | None:
     row = await db.fetchrow(
-        "SELECT * FROM disputatio_topics WHERE telegram_id = $1 AND lower(name) = lower($2)",
+        "SELECT * FROM elephant_topics WHERE telegram_id = $1 AND lower(name) = lower($2)",
         telegram_id,
         name,
     )
@@ -164,7 +164,7 @@ async def create_topic(
 ) -> Topic:
     row = await db.fetchrow(
         """
-        INSERT INTO disputatio_topics
+        INSERT INTO elephant_topics
             (telegram_id, name, description, frequency,
              send_hour, send_minute, send_dow, schedule_days, timezone, sources,
              source_guidance)
@@ -196,7 +196,7 @@ async def update_topic(topic_id: UUID, **fields: object) -> None:
     keys = list(fields)
     sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(keys))
     await db.execute(
-        f"UPDATE disputatio_topics SET {sets} WHERE id = $1",  # noqa: S608
+        f"UPDATE elephant_topics SET {sets} WHERE id = $1",  # noqa: S608
         topic_id,
         *[fields[k] for k in keys],
     )
@@ -204,7 +204,7 @@ async def update_topic(topic_id: UUID, **fields: object) -> None:
 
 async def stamp_sent(topic_id: UUID) -> None:
     await db.execute(
-        "UPDATE disputatio_topics SET last_sent_at = now() WHERE id = $1",
+        "UPDATE elephant_topics SET last_sent_at = now() WHERE id = $1",
         topic_id,
     )
 
@@ -212,7 +212,7 @@ async def stamp_sent(topic_id: UUID) -> None:
 async def get_all_active_topics() -> list[Topic]:
     """Return all unpaused topics across all users. Used by the cron job."""
     rows = await db.fetch(
-        "SELECT * FROM disputatio_topics WHERE paused = false ORDER BY telegram_id, created_at",
+        "SELECT * FROM elephant_topics WHERE paused = false ORDER BY telegram_id, created_at",
     )
     return [_topic(r) for r in rows]
 
@@ -224,7 +224,7 @@ async def get_all_active_topics() -> list[Topic]:
 
 async def get_seen_urls(topic_id: UUID) -> set[str]:
     rows = await db.fetch(
-        "SELECT article_url FROM disputatio_seen WHERE topic_id = $1",
+        "SELECT article_url FROM elephant_seen WHERE topic_id = $1",
         topic_id,
     )
     return {r["article_url"] for r in rows}
@@ -243,7 +243,7 @@ async def max_similarity(
     row = await db.fetchrow(
         """
         SELECT MAX(1 - (content_embedding <=> $1::vector)) AS similarity
-        FROM disputatio_seen
+        FROM elephant_seen
         WHERE topic_id = $2
           AND seen_at > $3
           AND content_embedding IS NOT NULL
@@ -266,7 +266,7 @@ async def record_seen(
     for article, embedding in zip(articles, embeddings, strict=True):
         await db.execute(
             """
-            INSERT INTO disputatio_seen
+            INSERT INTO elephant_seen
                 (topic_id, article_url, headline, content_embedding, published_at)
             VALUES ($1, $2, $3, $4::vector, $5)
             ON CONFLICT DO NOTHING
@@ -281,17 +281,15 @@ async def record_seen(
 
 async def clear_seen(topic_id: UUID) -> int:
     """Delete all seen-article records for *topic_id*. Returns row count deleted."""
-    row = await db.fetchrow(
-        "SELECT COUNT(*) AS n FROM disputatio_seen WHERE topic_id = $1", topic_id
-    )
+    row = await db.fetchrow("SELECT COUNT(*) AS n FROM elephant_seen WHERE topic_id = $1", topic_id)
     n = int(row["n"]) if row else 0
-    await db.execute("DELETE FROM disputatio_seen WHERE topic_id = $1", topic_id)
+    await db.execute("DELETE FROM elephant_seen WHERE topic_id = $1", topic_id)
     return n
 
 
 async def delete_topic(topic_id: UUID) -> None:
     """Delete a topic and all its associated data."""
-    await db.execute("DELETE FROM disputatio_feedback WHERE topic_id = $1", topic_id)
-    await db.execute("DELETE FROM disputatio_digests WHERE topic_id = $1", topic_id)
-    await db.execute("DELETE FROM disputatio_seen WHERE topic_id = $1", topic_id)
-    await db.execute("DELETE FROM disputatio_topics WHERE id = $1", topic_id)
+    await db.execute("DELETE FROM elephant_feedback WHERE topic_id = $1", topic_id)
+    await db.execute("DELETE FROM elephant_digests WHERE topic_id = $1", topic_id)
+    await db.execute("DELETE FROM elephant_seen WHERE topic_id = $1", topic_id)
+    await db.execute("DELETE FROM elephant_topics WHERE id = $1", topic_id)

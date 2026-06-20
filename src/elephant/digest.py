@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 
 from agent.services.llm import build_model
-from disputatio.models import Story
+from elephant.models import Story
 
 
 class DigestOutput(BaseModel):
@@ -63,7 +63,7 @@ def _system_prompt(ctx: RunContext[_Deps]) -> str:
     )
     lang = ctx.deps.language
     return (
-        "You are writing a news digest for Disputatio, a multi-perspective intelligence bot. "
+        "You are writing a news digest for Eat the Elephant, a multi-perspective intelligence bot. "
         "Your job: present today's stories clearly and factually, showing what different sources "
         "said side by side — so the reader can see the full picture and judge for themselves. "
         "Be precise and neutral. Never take sides on contested events.\n\n"

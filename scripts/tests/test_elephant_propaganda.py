@@ -1,18 +1,18 @@
-"""Tests for disputatio/propaganda.py.
+"""Tests for elephant/propaganda.py.
 
 Offline tests cover prompt formatting and signal-merging logic.
 Integration tests fire a real LLM call to verify signal extraction.
 
-    uv run pytest scripts/tests/test_disputatio_propaganda.py              # offline
-    uv run pytest -m integration scripts/tests/test_disputatio_propaganda.py
+    uv run pytest scripts/tests/test_elephant_propaganda.py              # offline
+    uv run pytest -m integration scripts/tests/test_elephant_propaganda.py
 """
 
 from __future__ import annotations
 
 import pytest
 
-from disputatio.models import SourceView, Story
-from disputatio.propaganda import SourceSignals, _format_prompt, _merge, analyze
+from elephant.models import SourceView, Story
+from elephant.propaganda import SourceSignals, _format_prompt, _merge, analyze
 
 
 def _story(headline: str, *views: tuple[str, str, str]) -> Story:

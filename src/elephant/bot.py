@@ -1,8 +1,8 @@
-"""Telegram bot: all handlers and Application wiring for Disputatio.
+"""Telegram bot: all handlers and Application wiring for Eat the Elephant.
 
 Run locally with long polling (no public URL needed):
 
-    uv run disputatio-bot
+    uv run elephant-bot
 
 In production the same handlers run via webhook — see app.py.
 """
@@ -30,8 +30,8 @@ from telegram.ext import (
 from agent.config import get_settings
 from agent.logging_setup import setup_logging
 from agent.services.llm import build_model
-from disputatio import jobs, research, store
-from disputatio.models import Topic
+from elephant import jobs, research, store
+from elephant.models import Topic
 
 # ---------------------------------------------------------------------------
 # ConversationHandler states (shared by /add_topic and /schedule)
@@ -259,9 +259,8 @@ async def _reply(update: Update, text: str, **kwargs: object) -> None:
 # ---------------------------------------------------------------------------
 
 _WELCOME = (
-    "Welcome to *Disputatio* — news from multiple perspectives.\n\n"
-    "Track topics you care about. Get digests comparing how different outlets cover the same "
-    "story, with rhetoric and bias signals."
+    "Welcome to *Eat the Elephant* 🐘\n\n"
+    "Track any topic. Get daily briefings from sources that disagree. One bite at a time."
 )
 
 _START_KEYBOARD = InlineKeyboardMarkup(
@@ -1951,7 +1950,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
 
 def main() -> None:
     setup_logging()
-    logger.info("starting disputatio bot (polling)")
+    logger.info("starting elephant bot (polling)")
     build_application().run_polling()
 
 

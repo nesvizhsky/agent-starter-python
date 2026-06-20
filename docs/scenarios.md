@@ -124,6 +124,6 @@ On Sunday, bot sends the weekly synthesis:
 User finds the bot and sends `/start`.
 
 Bot:
-> *"Welcome to Disputatio — where every story gets a fair trial.*
+> *"Welcome to Eat the Elephant — where every story gets a fair trial.*
 > *I'll track topics for you, gather what different sources say, and flag the spin.*
 > *Ready to add your first topic? Send /add_topic to begin."*
