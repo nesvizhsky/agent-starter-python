@@ -395,3 +395,30 @@ add_topic/schedule flow can't race with itself — only *unrelated* updates (oth
 users, other commands from the same user) now run concurrently instead of
 queueing behind a slow digest. Updated the now-inaccurate "Other commands won't
 respond" copy to "feel free to keep using me meanwhile."
+
+## 2026-06-21 09:20 — Found and fixed why scheduled digests silently failed
+User report: a digest never arrived, plus a Railway "Deploy Crashed!" notification
+for elephant-cron-tick. Checked metrics: p50/p90/p95/p99 latency on the main app
+were ALL exactly 30000ms — a flat ceiling, not organic variance, meaning every
+request was hitting a hard timeout. Root cause: POST /cron/tick awaited the
+*entire* run_due_digests() pipeline inline — every due topic's full research +
+LLM pipeline, sequentially, each taking 1-2 min per the bot's own UI text. The
+elephant-cron-tick service is just `curl -f .../cron/tick` on an hourly Railway
+cron; curl's connection got cut by the proxy timeout long before the real work
+finished, curl exited non-zero, and Railway reported the cron container itself
+as "crashed" — while the killed request likely cut off whatever digest was
+mid-flight, which is why nothing arrived. Manual /check never hit this because
+it runs through the bot's own conversation handling, not this HTTP roundtrip.
+
+This was very likely silently dropping most scheduled digests whenever a tick
+had real topics due, not a one-off — a single topic's pipeline alone exceeds a
+30s window, so almost every non-empty tick should have been timing out.
+
+Fix: /cron/tick now fires run_due_digests() as a background asyncio task and
+returns an immediate ack, decoupling actual processing time from the HTTP
+request's lifetime entirely. curl gets its 200 in well under a second regardless
+of how many topics are due; the real work continues after the response is sent.
+Known trade-off: a background task can still get cut short if the process
+redeploys mid-run — acceptable for now since it's strictly better than the
+previous guaranteed-timeout failure mode, but worth hardening later (e.g. a
+shutdown hook that waits for in-flight runs) if it turns out to matter in practice.

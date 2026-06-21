@@ -11,6 +11,7 @@ Two endpoints, both protected by a shared secret:
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -84,10 +85,21 @@ async def telegram_webhook(
     return {"ok": True}
 
 
+async def _run_due_digests_logged(ptb: Application) -> None:  # type: ignore[type-arg]
+    """Background wrapper: run_due_digests() already isolates per-topic failures,
+    but if something at the top level still raises, log it instead of losing it
+    silently — there's no HTTP response left to carry the error by this point."""
+    try:
+        digests = await run_due_digests(ptb.bot)
+        logger.info("cron tick done — digests={}", digests)
+    except Exception:  # noqa: BLE001
+        logger.exception("cron tick failed")
+
+
 @app.post("/cron/tick")
 async def cron_tick(
     x_cron_secret: str | None = Header(default=None),
-) -> dict[str, int]:
+) -> dict[str, bool]:
     settings = get_settings()
     if not settings.cron_secret or not secrets.compare_digest(
         x_cron_secret or "", settings.cron_secret
@@ -96,8 +108,13 @@ async def cron_tick(
     ptb = _ptb
     if ptb is None:
         raise HTTPException(status_code=503)
-    digests = await run_due_digests(ptb.bot)
-    return {"digests": digests}
+    # Fire-and-forget: a digest run can take minutes (LLM + research calls per due
+    # topic, sequentially), far past any HTTP/proxy timeout. Awaiting it inline made
+    # the cron caller's request time out — Railway's curl-based cron then reports a
+    # "crashed" deployment, and the request being killed could cut a digest off
+    # mid-send. Acknowledge immediately; the actual work continues in the background.
+    asyncio.create_task(_run_due_digests_logged(ptb))
+    return {"started": True}
 
 
 def main() -> None:
