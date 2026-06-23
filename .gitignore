@@ -24,6 +24,9 @@ ideas/
 # Experiment run logs (regenerated each run, not source)
 scripts/experiments/results/
 
+# Backups of DB values before a backfill script overwrites them
+scripts/backfill_backups/
+
 # Caches
 .pytest_cache/
 .ruff_cache/
