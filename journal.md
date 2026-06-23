@@ -511,3 +511,28 @@ misfired once on a foreign-language headline batch during testing (one Serbian
 Iran-talks article leaked into football-topic results). Outlets with neither a
 sitemap/RSS feed nor reliable Perplexity coverage (e.g. `rt.com`) still have no
 good option — that's `source_audit.py`/vetting territory, not yet built.
+
+## 2026-06-23 21:40 — fetch.py: added excerpt fetching, closing the "read inside" gap
+
+User framed the target behavior precisely: a human researcher scrolling TASS's
+feed doesn't just read headlines — for the ones that look relevant, they open
+the article and read it. fetch.py's first version stopped at the headline;
+articles it returned had `context=None`, much thinner than the old
+Perplexity-based path (which always returns a paragraph of real prose, since
+Perplexity already "read" the page to answer the query). `perspectives.py` and
+`propaganda.py` both lean on that context/summary text, so this was a real gap,
+not a cosmetic one.
+
+Added `_fetch_excerpts()`: after relevance filtering narrows candidates down to
+a handful, fetch each article's page once and pull its meta description
+(`og:description` / `name="description"` / `twitter:description` — near-
+universal on real news sites for SEO/social-sharing). Deliberately scoped to
+the post-filter set, not all candidates, so cost stays bounded regardless of
+how many headlines the outlet published. Confirmed live against TASS: excerpts
+came back as real prose ("According to Moscow Mayor Sergey Sobyanin, 80 drones
+heading for Moscow have been downed since midnight"), not just headlines.
+
+Extracted `_extract_excerpt(html) -> str | None` as a pure function (matching
+the rest of the module's pattern of separating parsing from the network call)
+so the regex logic has offline test coverage instead of only being exercised
+by a live HTTP integration test.

@@ -256,6 +256,13 @@ sport/weather/politics), so one cheap fast-tier LLM call (`_filter_relevant()`) 
 which headlines are actually about the topic — classifying real headlines is a much
 smaller, lower-risk ask than asking a model to recall article content from memory.
 
+For the small set that survives that filter, `_fetch_excerpts()` fetches each article's
+page once and pulls its meta description (`og:description`/`name="description"`/
+`twitter:description`) — "open it and read what's inside" rather than judging by headline
+alone, giving `perspectives.py`/`propaganda.py` the same kind of real prose context the
+Perplexity path already provided. Deliberately scoped to the post-filter set, not all
+candidates, so cost stays bounded regardless of outlet volume.
+
 `fetch_recent()` returns `None` when neither method finds a usable feed/sitemap at all
 (caller falls back to Perplexity) vs. `[]` when a method works but nothing was published
 in the lookback window (a real answer, not a failure) — callers must not conflate these.

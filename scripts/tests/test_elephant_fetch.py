@@ -18,6 +18,7 @@ import pytest
 
 from elephant.fetch import (
     _Candidate,
+    _extract_excerpt,
     _localname,
     _parse_dt,
     _parse_feed,
@@ -187,6 +188,38 @@ def test_candidate_defaults_headline_is_real_true() -> None:
     assert c.headline_is_real is True
 
 
+def test_candidate_excerpt_defaults_to_none() -> None:
+    c = _Candidate(url="https://x.com/a", headline="Real title", published_at=datetime.now(UTC))
+    assert c.excerpt is None
+
+
+# ---------------------------------------------------------------------------
+# Offline: excerpt extraction ("open the article and read what's inside")
+# ---------------------------------------------------------------------------
+
+
+def test_extract_excerpt_from_og_description() -> None:
+    html = '<head><meta property="og:description" content="Russia launched new strikes."></head>'
+    assert _extract_excerpt(html) == "Russia launched new strikes."
+
+
+def test_extract_excerpt_from_name_description() -> None:
+    html = '<head><meta name="description" content="A plain meta description."></head>'
+    assert _extract_excerpt(html) == "A plain meta description."
+
+
+def test_extract_excerpt_prefers_og_over_plain_description() -> None:
+    html = (
+        '<head><meta property="og:description" content="OG version.">'
+        '<meta name="description" content="Plain version."></head>'
+    )
+    assert _extract_excerpt(html) == "OG version."
+
+
+def test_extract_excerpt_returns_none_when_missing() -> None:
+    assert _extract_excerpt("<head><title>No description here</title></head>") is None
+
+
 # ---------------------------------------------------------------------------
 # Integration: real network calls
 # ---------------------------------------------------------------------------
@@ -217,6 +250,10 @@ async def test_fetch_recent_bbc_returns_real_dated_articles() -> None:
         assert a.headline
         assert a.published_at is not None
         assert a.published_at >= since
+    # At least some real articles should have a recovered excerpt ("read what's
+    # inside") rather than every single one falling back to context=None.
+    with_excerpt = [a for a in articles if a.context]
+    assert with_excerpt, "expected at least one article with a recovered excerpt"
 
 
 @pytest.mark.integration

@@ -20,7 +20,10 @@ Either method can return far more articles than relate to one topic (a sitemap
 mixes sport/weather/politics), so one cheap fast-tier LLM call classifies which
 headlines are actually about the topic — classifying real headlines is a much
 smaller, lower-risk ask than research.py's old approach of asking a model to
-recall article content from memory.
+recall article content from memory. For the small set that survives that filter,
+a real excerpt (meta description) is fetched from the article page itself — "open
+it and read what's inside", not just judge it by headline — giving downstream
+clustering/analysis the same kind of real prose Perplexity's path provides.
 
 fetch_recent() returns None when neither method finds a usable feed/sitemap at
 all, so callers (research.py) can fall back to the existing Perplexity query —
@@ -71,6 +74,9 @@ class _Candidate(BaseModel):
     # need a one-off page fetch to recover a real title before relevance filtering
     # can work; an LLM can't judge relevance from an opaque article ID.
     headline_is_real: bool = True
+    # Filled in only for candidates that survive relevance filtering — "actually
+    # open the article and read what's inside" (a real excerpt), not just headline.
+    excerpt: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +454,58 @@ async def _recover_titles(client: httpx.AsyncClient, candidates: list[_Candidate
 
 
 # ---------------------------------------------------------------------------
+# Excerpt fetching — "open the article and read what's inside", not just the
+# headline. Only run on candidates that already survived relevance filtering
+# (a small set), since fetching every candidate's full page would be wasteful.
+# ---------------------------------------------------------------------------
+
+_EXCERPT_FETCH_TIMEOUT = 5.0
+_MAX_CONCURRENT_EXCERPT_FETCHES = 10
+_EXCERPT_PATTERNS = (
+    re.compile(r'property=["\']og:description["\']\s+content=["\']([^"\']+)', re.I),
+    re.compile(r'name=["\']description["\']\s+content=["\']([^"\']+)', re.I),
+    re.compile(r'name=["\']twitter:description["\']\s+content=["\']([^"\']+)', re.I),
+)
+
+
+def _extract_excerpt(html: str) -> str | None:
+    head = html[:20_000]
+    for pattern in _EXCERPT_PATTERNS:
+        match = pattern.search(head)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+async def _fetch_excerpt(
+    client: httpx.AsyncClient, url: str, semaphore: asyncio.Semaphore
+) -> str | None:
+    async with semaphore:
+        try:
+            resp = await client.get(url, timeout=_EXCERPT_FETCH_TIMEOUT, follow_redirects=True)
+        except Exception:  # noqa: BLE001 — any failure just means "no excerpt, headline only"
+            return None
+    return _extract_excerpt(resp.text)
+
+
+async def _fetch_excerpts(client: httpx.AsyncClient, candidates: list[_Candidate]) -> None:
+    """Fill in a real excerpt (meta description) for each candidate, in place.
+    Almost every real news site has one for SEO/social-sharing, so this should
+    succeed far more often than not; a miss just leaves context=None downstream,
+    same as before this existed."""
+    if not candidates:
+        return
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_EXCERPT_FETCHES)
+    excerpts = await asyncio.gather(*[_fetch_excerpt(client, c.url, semaphore) for c in candidates])
+    found = 0
+    for candidate, excerpt in zip(candidates, excerpts, strict=True):
+        if excerpt:
+            candidate.excerpt = excerpt
+            found += 1
+    logger.debug("fetch: recovered {} of {} article excerpts", found, len(candidates))
+
+
+# ---------------------------------------------------------------------------
 # Topic relevance filtering
 # ---------------------------------------------------------------------------
 
@@ -522,6 +580,12 @@ async def fetch_recent(
             await _recover_titles(client, candidates)
 
         relevant = await _filter_relevant(candidates, topic_name, description)
+        # "Open the article and read what's inside" — only for the small relevant
+        # set, not all candidates, so cost stays bounded regardless of how many
+        # headlines the outlet published.
+        async with httpx.AsyncClient(headers={"User-Agent": _USER_AGENT}) as client:
+            await _fetch_excerpts(client, relevant)
+
         logger.info(
             "fetch.fetch_recent: {!r} via {} -> {} candidates, {} relevant",
             outlet,
@@ -536,7 +600,7 @@ async def fetch_recent(
                 source=domain,
                 published_at=c.published_at,
                 summary=c.headline,
-                context=None,
+                context=c.excerpt,
                 is_general_query=False,
             )
             for c in relevant
