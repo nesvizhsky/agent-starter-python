@@ -349,3 +349,23 @@ async def delete_topic(topic_id: UUID) -> None:
     await db.execute("DELETE FROM elephant_digests WHERE topic_id = $1", topic_id)
     await db.execute("DELETE FROM elephant_seen WHERE topic_id = $1", topic_id)
     await db.execute("DELETE FROM elephant_topics WHERE id = $1", topic_id)
+
+
+async def get_cached_domain(outlet: str) -> str | None:
+    """Look up a previously-verified outlet name -> domain mapping. Global cache,
+    shared across all topics/users — an outlet's domain doesn't depend on who's
+    tracking it."""
+    row = await db.fetchrow(
+        "SELECT domain FROM elephant_outlet_domains WHERE outlet_name = $1", outlet.lower()
+    )
+    return str(row["domain"]) if row else None
+
+
+async def cache_domain(outlet: str, domain: str) -> None:
+    """Store a verified outlet name -> domain mapping, overwriting any stale entry."""
+    await db.execute(
+        "INSERT INTO elephant_outlet_domains (outlet_name, domain) VALUES ($1, $2) "
+        "ON CONFLICT (outlet_name) DO UPDATE SET domain = $2, resolved_at = now()",
+        outlet.lower(),
+        domain,
+    )

@@ -32,6 +32,7 @@ from pydantic_ai import Agent
 
 from agent.services.llm import Research, build_model
 from agent.services.llm import research as _research
+from elephant import fetch
 from elephant.article_dates import attach_published_dates
 from elephant.models import Article, Side, Topic
 
@@ -187,6 +188,7 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
     excluded = {s.lower() for s in topic.excluded_sources}
     active = [s for s in topic.sources if s.lower() not in excluded]
     lookback = lookback_label(lookback_hours)
+    since = datetime.now(UTC) - timedelta(hours=lookback_hours)
 
     # Side outlets: up to _MAX_OUTLETS_PER_SIDE per identified side, skipping anything
     # already covered by a user-tracked source or explicitly excluded.
@@ -206,10 +208,18 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
     recency = _recency_filter(lookback_hours)
     # User-tracked sources bypass domain filtering (they chose it deliberately).
     # Auto-suggested side outlets get the same quality bar as the general query.
-    coros = [_query_source(query_subject, src, lookback, today, recency) for src in active]
+    coros = [
+        _query_source(query_subject, src, lookback, today, recency, since=since) for src in active
+    ]
     coros += [
         _query_source(
-            query_subject, src, lookback, today, recency, block_domains=_BLOCKED_GENERAL_DOMAINS
+            query_subject,
+            src,
+            lookback,
+            today,
+            recency,
+            block_domains=_BLOCKED_GENERAL_DOMAINS,
+            since=since,
         )
         for src in side_outlets
     ]
@@ -286,9 +296,26 @@ async def _query_source(
     today: str,
     recency: str = "week",
     block_domains: frozenset[str] | None = None,
+    since: datetime | None = None,
 ) -> list[Article]:
-    cutoff = _cutoff_date(lookback)
     outlet = _source_label(source)
+
+    # Try fetching directly from the outlet's own site first (real sitemap/RSS —
+    # see fetch.py) — only falls through to the Perplexity recall-based query below
+    # when no direct method is available at all for this outlet.
+    if since is not None:
+        direct = await fetch.fetch_recent(outlet, topic_name, topic_name, since)
+        if direct is not None:
+            if block_domains:
+                direct = [a for a in direct if not any(a.source.endswith(d) for d in block_domains)]
+            logger.debug(
+                "source {!r} -> {} articles via direct fetch (skipped Perplexity)",
+                source,
+                len(direct),
+            )
+            return direct
+
+    cutoff = _cutoff_date(lookback)
     query = (
         f"Today is {today}. Only include articles published after {cutoff}. "
         f"What specifically happened with {topic_name!r} according to {outlet} "

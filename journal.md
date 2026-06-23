@@ -460,3 +460,54 @@ sides (confirmed by rerunning the same input 3x — always succeeded). Added a o
 safety net on empty extraction in `identify_sides()`, justified by the fact this only
 runs once per topic — cheap insurance against silently leaving a real conflict topic
 side-less for its whole lifetime.
+
+## 2026-06-23 21:10 — Built fetch.py: direct sitemap/RSS retrieval, before falling back to Perplexity
+
+Continued the news-gathering improvement thread. Probed real outlets first
+(`scripts/experiments/probe_feed_discovery.py`, then manual curl) before designing
+anything: BBC, Reuters, and TASS — the exact outlets `research.py` already documents
+as Perplexity's weak spot — all killed or hid RSS years ago, but all three still
+expose a sitemap via `robots.txt`. Sitemaps, not RSS, are the real backbone for
+"what did this specific outlet just publish."
+
+Built `fetch.py`: resolves an outlet name to a domain (LLM guess + live HTTP
+verification, cached globally in new `elephant_outlet_domains` table since the mapping
+never depends on which topic asks), then tries the Google News Sitemap standard, then
+RSS/Atom at a common path. A cheap fast-tier LLM call classifies which of the
+resulting headlines are actually about the topic, since a sitemap mixes
+sport/weather/politics indiscriminately. Wired into `research.py`'s `_query_source()`
+as the first attempt — Perplexity's recall-based query only runs when neither method
+finds a usable feed at all for that outlet.
+
+Two real bugs caught by testing against live outlets, not assumptions:
+1. BBC's robots.txt lists "archive" before "news" in its sitemap list — walking
+   robots.txt order first pulled mostly-stale archive entries. Fixed by sorting
+   discovered sitemap URLs to prefer ones with "news" in the path, at both the
+   top-level and the leaf level inside a sitemap index.
+2. TASS's sitemap uses the older Sitemaps 0.91 protocol — no `news:title` field at
+   all, just `loc`/`lastmod`. Headlines fell back to the bare numeric URL ID
+   ("2149717"), which made the relevance classifier unable to discriminate (it
+   accepted ~100% of candidates when fed meaningless IDs — confirmed via a quick
+   isolated test that the same classifier correctly filters 2/4 when given real
+   headlines, so the bug was garbage input, not a broken classifier). Added
+   `_recover_titles()`: a bounded page-fetch pass (same `<title>`/`og:title` regex
+   scan as `article_dates.py` already uses for dates) for any candidate whose
+   headline is the URL fallback, before relevance filtering runs.
+
+Also hit a classic ElementTree gotcha while writing the Atom parser: `_child(entry,
+"updated") or _child(entry, "published")` is wrong — an Element with no child
+elements (just text) is falsy under ElementTree's truthiness rules even when found,
+so `or` silently skipped a present `<updated>` tag. Caught by an offline test, not
+by reading the code — worth remembering for any future XML work in this codebase.
+
+Used `defusedxml` instead of stdlib `ElementTree` for all parsing here, since this
+is the one module that parses XML from arbitrary third-party domains (XXE risk).
+
+Known limitations, accepted rather than chased further right now: leaf-sitemap
+walking is capped at `_MAX_SITEMAP_LEAVES` and not perfectly ordered by article
+recency (only by when the leaf file was last regenerated), so very high-volume
+outlets may miss some in-window articles; the relevance classifier is cheap and
+misfired once on a foreign-language headline batch during testing (one Serbian
+Iran-talks article leaked into football-topic results). Outlets with neither a
+sitemap/RSS feed nor reliable Perplexity coverage (e.g. `rt.com`) still have no
+good option — that's `source_audit.py`/vetting territory, not yet built.

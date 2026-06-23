@@ -20,7 +20,8 @@ src/
 ├── agent/            # shared services (unchanged): llm, media, storage, db, config
 └── elephant/       # this project
     ├── store.py          # all DB access, every query scoped by telegram_id via topic FK
-    ├── research.py       # gather articles: research() calls per source + topic
+    ├── research.py       # gather articles: direct fetch.py first, Perplexity fallback
+    ├── fetch.py           # direct sitemap/RSS retrieval from an outlet's own site
     ├── dedup.py          # freshness filter: URL match + semantic similarity
     ├── perspectives.py   # cluster articles into stories (one event, N source views)
     ├── propaganda.py     # rhetoric analysis agent — signals, never verdicts
@@ -97,6 +98,16 @@ CREATE TABLE elephant_seen (
 
 CREATE INDEX ON elephant_seen (topic_id);
 CREATE INDEX ON elephant_seen (topic_id, article_url);
+
+-- Global cache: outlet name -> verified homepage domain (e.g. "BBC" -> "bbc.com").
+-- Not topic-scoped — an outlet's domain never depends on who's tracking it. Used by
+-- fetch.py's resolve_domain(); a row here means the domain was HTTP-verified reachable
+-- at resolved_at, not just an LLM guess.
+CREATE TABLE elephant_outlet_domains (
+    outlet_name TEXT PRIMARY KEY,
+    domain      TEXT NOT NULL,
+    resolved_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- Every digest sent, kept for weekly synthesis.
 CREATE TABLE elephant_digests (
@@ -207,10 +218,55 @@ retries the extraction step once on an empty result, since this only runs once p
 and a flaky structured-output call would otherwise silently leave a real conflict topic
 side-less for its whole lifetime.
 
-**Known limitation:** Perplexity Sonar doesn't index all sources equally — Russian state
-media and paywalled outlets may not surface reliably even when a focused per-outlet query
-asks for them directly; this is genuinely probabilistic, not a guarantee. Direct-URL
-fetching (bypassing Perplexity's index for known outlets) is v2 scope.
+**Known limitation, now mostly fixed (2026-06-23):** Perplexity Sonar doesn't index all
+sources equally — Russian state media and paywalled outlets may not surface reliably even
+when a focused per-outlet query asks for them directly. `_query_source()` now tries
+`fetch.fetch_recent()` (direct retrieval from the outlet's own site) first; the Perplexity
+query below only runs when no direct method is available at all for that outlet. Remaining
+gap: outlets with neither a discoverable sitemap/RSS feed nor reliable Perplexity coverage
+(e.g. `rt.com` in our testing) still have no good option.
+
+### `fetch.py`
+Fetches real, currently-published articles directly from an outlet's own site instead of
+asking an LLM to recall what it published. Two real, deterministic discovery methods,
+tried in order:
+1. **News sitemap** (the Google News Sitemap standard, `news:news` XML namespace) — exact
+   `published_at` + real headline + URL, no LLM call. Confirmed via
+   `scripts/experiments/probe_feed_discovery.py` that BBC, Reuters, and TASS — the outlets
+   Perplexity is documented as weakest on — all expose this, even where they killed RSS
+   years ago. Sitemap discovery prioritizes URLs containing "news" (outlets typically also
+   expose archive/video/topics sitemaps that would otherwise dominate the candidate list
+   with stale or undated entries).
+2. **RSS/Atom** at a common path — works well for smaller/tech outlets (TechCrunch, Ars
+   Technica, Habr) that never had a reason to drop RSS.
+
+An outlet name (e.g. "TASS") isn't a domain — `resolve_domain()` asks a fast-tier LLM to
+guess one, then verifies it with a live HTTP request before trusting or caching it
+(`elephant_outlet_domains`, global, resolved once per outlet name ever). A wrong guess
+just fails the check and returns `None`, never silently cached.
+
+Not every sitemap carries a real title — TASS's, e.g., is the older Sitemaps 0.91 protocol
+with only `loc`/`lastmod`, no `news:title`. `_recover_titles()` does one bounded page-fetch
+pass (same `<title>`/`og:title` scan pattern as `article_dates.py`) for any candidate
+lacking a real title before relevance filtering, since an LLM can't judge relevance from
+an opaque article ID like `2149717`.
+
+Either method can return far more articles than relate to one topic (a sitemap mixes
+sport/weather/politics), so one cheap fast-tier LLM call (`_filter_relevant()`) classifies
+which headlines are actually about the topic — classifying real headlines is a much
+smaller, lower-risk ask than asking a model to recall article content from memory.
+
+`fetch_recent()` returns `None` when neither method finds a usable feed/sitemap at all
+(caller falls back to Perplexity) vs. `[]` when a method works but nothing was published
+in the lookback window (a real answer, not a failure) — callers must not conflate these.
+
+**Known limitations:** leaf sitemaps in a sitemap index aren't reliably ordered by article
+recency, only by when the leaf file itself was last regenerated, so only the
+`_MAX_SITEMAP_LEAVES` most-recently-modified leaves are walked — very high-volume outlets
+may have some in-window articles missed. The relevance classifier is a cheap model and can
+misfire on foreign-language headline batches (observed one false positive mixing an
+unrelated Serbian-language article into football-topic results during testing) — acceptable
+for now, not chased further.
 
 ### `dedup.py`
 Two-pass freshness filter using `store.get_seen_urls()` and `store.get_seen_embeddings()`.
@@ -332,12 +388,13 @@ FastAPI. Lifespan: init PTB + apply migrations + register webhook (if `PUBLIC_UR
 
 | Service | Used for |
 |---|---|
-| `llm.research()` | News gathering (`research.py`) |
+| `llm.research()` | News gathering fallback (`research.py`), grounded source identification |
 | `llm.embed_one()` | Semantic dedup (`dedup.py`) |
-| `llm.build_model("fast")` | Event clustering, intent dispatcher |
+| `llm.build_model("fast")` | Event clustering, intent dispatcher, source extraction, fetch.py's domain guess + relevance filter |
 | `llm.build_model("balanced")` | Propaganda analysis, digest generation |
 | `llm.build_model("smart")` | Weekly synthesis only |
 | `db.apply_migrations()` | On startup |
+| direct HTTP (`httpx`, no LLM) | `fetch.py` — sitemap/RSS retrieval, domain verification |
 
 ## Entrypoints (pyproject.toml)
 
