@@ -184,9 +184,28 @@ parties/perspectives in a topic (states, government vs. opposition, regulator vs
 industry, etc.), each with a few example outlets — empty for topics with no inherent
 sides (archaeology, science). Generated once per topic (creation or description edit),
 stored as `Topic.sides_json`. `gather()` fires one focused per-outlet query for up to
-2 outlets per side (`_MAX_OUTLETS_PER_SIDE`), same mechanism as tracked sources, with the
+3 outlets per side (`_MAX_OUTLETS_PER_SIDE`), same mechanism as tracked sources, with the
 general-query domain blocklist applied (auto-suggested outlets weren't user-chosen, so
 they get the same quality bar).
+
+**Grounded, not guessed (2026-06-23):** `identify_sides()` and `generate_source_guidance()`
+are both two-step: a `_research()` call (Perplexity Sonar) finds real, currently active
+outlets first, then a cheap `build_model("fast")` extraction pass turns that prose into
+structured output, naming only outlets the research text actually mentioned. This replaced
+an earlier version that asked an LLM to name outlets purely from its own background
+knowledge with no search — a real hallucination risk, since a plausible-sounding outlet
+name isn't necessarily a real one. Compared against `claude-sonnet-4.6` (no search) and
+several OpenRouter `:online`-plugin models (Grok, Gemini, DeepSeek, GPT) in
+`scripts/experiments/compare_research_models.py`; plain `perplexity/sonar` gave the most
+specific, reliably-cited outlet names for the lowest cost — the pricier search tiers and
+non-Perplexity `:online` models added cost without naming more accurate outlets, and one
+(`gemini-3.1-flash-lite:online`) silently dropped citations on some queries.
+The extraction step explicitly excludes major wire services (Reuters, AP, BBC, Guardian,
+etc.) from being attributed to any one side — those are deliberately left to the general
+catch-all query (see below), not given an always-on per-side slot. `identify_sides()`
+retries the extraction step once on an empty result, since this only runs once per topic
+and a flaky structured-output call would otherwise silently leave a real conflict topic
+side-less for its whole lifetime.
 
 **Known limitation:** Perplexity Sonar doesn't index all sources equally — Russian state
 media and paywalled outlets may not surface reliably even when a focused per-outlet query

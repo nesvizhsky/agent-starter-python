@@ -324,94 +324,133 @@ _GENERAL_QUERY_INSTRUCTIONS = (
     f"{_SOURCE_EXCLUSIONS}"
 )
 
-_source_profiler: Agent[None, str] = Agent(
+# Same two-step pattern as identify_sides() above: ground in a real search first,
+# then extract — instead of asking the model to invent outlet names from memory.
+_guidance_research_prompt = (
+    "What are the most authoritative, real, currently active outlets for tracking news "
+    "on {topic_name!r} ({description})? Cover: topic-specific specialist publications "
+    "(e.g. IEEE Spectrum/Ars Technica for tech, The Lancet/NEJM for medicine, IAEA for "
+    "nuclear, Variety/Deadline for film); regional/national outlets in the local language "
+    "if the topic is geographically specific; if the topic involves two or more "
+    "conflicting parties, each party's own state/government-aligned and sympathetic "
+    "press, named symmetrically for every party; wire services and major international "
+    "press (Reuters, AP, BBC, Guardian) as a neutral layer; and academic/institutional "
+    "primary sources where relevant (arXiv, PubMed, IAEA, WHO). Name specific outlets."
+)
+
+_guidance_extractor: Agent[None, str] = Agent(
     build_model("fast"),
     output_type=str,
     system_prompt=(
-        "You generate source guidance for a news research bot. Given a topic, write 2-4 sentences "
-        "naming the most relevant outlets to prioritise. Think carefully about:\n"
-        "1. Topic-specific specialist publications (e.g. IEEE Spectrum/Ars Technica for tech, "
-        "The Lancet/NEJM for medicine, IAEA for nuclear, Variety/Deadline for film)\n"
-        "2. Regional and national outlets in the LOCAL LANGUAGE if the topic is geographically "
-        "specific (e.g. for Japan: Nikkei Asia, NHK World, Mainichi; for Brazil: Folha de S.Paulo, "
-        "O Globo, Agência Brasil; for France: Le Monde, Le Figaro)\n"
-        "3. If the topic involves two or more conflicting parties (states, factions, government "
-        "vs. opposition, regulator vs. industry, etc.): identify each distinct party and name a "
-        "MIX of outlets that lean toward or report favorably on that party's position — official "
-        "state media or government channels where they exist, plus other sympathetic or aligned "
-        "press — not just outside commentary about that side. Do this symmetrically for every "
-        "party, never just some.\n"
-        "4. Wire services and major international press (Reuters, AP, BBC, Guardian) as a neutral, "
-        "outside-the-conflict layer\n"
-        "5. Academic or institutional primary sources where relevant (arXiv, PubMed, IAEA, WHO)\n\n"
-        "Always include specialist/regional, every conflicting party's own-leaning coverage, AND "
-        "international coverage together — never omit a party's side. "
-        "Start directly with 'Prioritise:' — no preamble. "
-        "Example for a two-state conflict: 'Prioritise: [State A]'s state/government-aligned "
-        "outlets plus 1-2 independent [State A] outlets; [State B]'s state/government-aligned "
-        "outlets plus 1-2 independent [State B] outlets; Reuters, AP, BBC for international "
-        "coverage.' Replace the bracketed placeholders with the actual countries/parties involved "
-        "and real outlet names — never output literal brackets."
+        "Extract source guidance for a news research bot from the research text below. "
+        "Write 2-4 sentences naming the most relevant outlets to prioritise, using ONLY "
+        "outlets actually named in the text — never invent one that isn't mentioned. "
+        "If the research named outlets for multiple conflicting parties, include every "
+        "party's outlets symmetrically — never omit a party's side. "
+        "Start directly with 'Prioritise:' — no preamble."
     ),
 )
 
 
-_MAX_OUTLETS_PER_SIDE = 4
+_MAX_OUTLETS_PER_SIDE = 3
 
 
 class _SidesOutput(BaseModel):
     sides: list[Side]
 
 
-_sides_identifier: Agent[None, _SidesOutput] = Agent(
-    build_model("balanced"),
+# Two-step, grounded in a real web search instead of the model's background knowledge:
+# 1. _research() (perplexity/sonar) finds real, currently active outlets per side.
+# 2. A cheap extraction pass turns that prose into structured Side objects, naming
+#    only outlets the research actually mentioned — never inventing beyond it.
+# Tested against claude-sonnet-4.6 (pure knowledge, no search), grok/gemini/deepseek/gpt-5.1
+# with OpenRouter's ":online" plugin, and other Perplexity Sonar tiers — plain sonar gave
+# the most specific, reliably-cited outlet names for the lowest cost (see
+# scripts/experiments/compare_research_models.py). Outlets it invents from background
+# knowledge alone — with no search — were the real risk this avoids, not search-engine quality.
+_sides_research_prompt = (
+    "Does the topic {topic_name!r} ({description}) involve distinct opposing parties "
+    "(e.g. states, government vs. opposition, regulator vs. industry, factions within a "
+    "country)? If yes, identify each side and name 2-4 real, currently active media "
+    "outlets per side that lean toward or report favorably on that side's position — "
+    "official state/institutional media where it exists, plus other sympathetic press. "
+    "If the topic has no inherent sides (e.g. archaeology, general science), say so "
+    "explicitly and name no sides."
+)
+
+_sides_extractor: Agent[None, _SidesOutput] = Agent(
+    build_model("fast"),
     output_type=_SidesOutput,
     system_prompt=(
-        "You identify the distinct parties/perspectives involved in a news topic, if any. "
-        "Sides are not always nation-states — they can be government vs. opposition, "
-        "regulator vs. industry, factions within a country, or any other clearly opposed "
-        "or distinct parties relevant to the topic.\n\n"
+        "Extract a structured list of sides/parties and their media outlets from the "
+        "research text below. Use ONLY sides and outlets actually named in the text — "
+        "never invent one that isn't mentioned.\n\n"
         "Rules:\n"
-        "1. If the topic has no inherent sides (e.g. archaeology, scientific discoveries, "
-        "general technology trends), return an EMPTY list. Do not invent sides that don't exist.\n"
-        "2. If sides exist, return one entry per side with 2-4 example outlet names that lean "
-        "toward or report favorably on that side's position — official state/institutional "
-        "media where it exists, plus other sympathetic press. Never name only one side; if you "
-        "identify any side, identify all of them.\n"
-        "3. Keep side names short and neutral, e.g. 'Russia', 'Ukraine', 'Government', "
-        "'Opposition', 'Industry', 'Regulators', 'Local residents'.\n"
-        "4. Outlet names only — no URLs, no descriptions."
+        "1. If the research concludes the topic has no inherent sides, return an EMPTY list.\n"
+        "2. If sides exist, return one entry per side discussed, with the specific outlet "
+        "names mentioned for it (up to 4). Never include only one side if the text discusses "
+        "multiple.\n"
+        "3. Keep side names short and neutral, matching how the text refers to them, e.g. "
+        "'Russia', 'Ukraine', 'Government', 'Opposition', 'Industry', 'Regulators'.\n"
+        "4. Outlet names only — no URLs, no descriptions.\n"
+        "5. NEVER attribute a major international wire service or global outlet (Reuters, AP, "
+        "AFP, BBC, Guardian, DW, CNN, Al Jazeera, etc.) to any one side, even if the research "
+        "text mentions it in that side's section — these are covered separately by a general "
+        "search and would waste a side's limited outlet slots if included here. Only include "
+        "outlets that are genuinely state-aligned, partisan, or otherwise lean toward one side."
     ),
 )
 
 
 async def identify_sides(description: str, topic_name: str) -> list[Side]:
-    """Identify the distinct parties/perspectives in a topic, each with example outlets.
+    """Identify the distinct parties/perspectives in a topic, each with example outlets,
+    grounded in a real web search rather than the model's unverified background knowledge.
 
-    Returns an empty list for topics with no inherent sides, or if the LLM call fails.
+    Returns an empty list for topics with no inherent sides, or if either call fails.
+    This only runs once per topic (creation, or a description edit), so a retry on an
+    empty extraction is cheap insurance against a one-off flaky structured-output call
+    silently leaving a real conflict topic side-less for its whole lifetime.
     """
-    prompt = f"Topic: {topic_name}\nDescription: {description}"
+    query = _sides_research_prompt.format(
+        topic_name=topic_name, description=description or topic_name
+    )
     try:
-        result = await _sides_identifier.run(prompt)
-        return result.output.sides
+        grounded = await _research(query)
     except Exception:  # noqa: BLE001
-        logger.warning("side identification failed for {!r} — assuming none", topic_name)
+        logger.warning("side research failed for {!r} — assuming none", topic_name)
         return []
+    prompt = f"Topic: {topic_name}\n\nResearch:\n{grounded.text}"
+    for attempt in range(2):
+        try:
+            result = await _sides_extractor.run(prompt)
+            if result.output.sides:
+                return result.output.sides
+        except Exception:  # noqa: BLE001
+            logger.warning("side extraction attempt {} failed for {!r}", attempt + 1, topic_name)
+    return []
 
 
 async def generate_source_guidance(description: str, topic_name: str) -> str:
-    """Generate topic-specific source guidance for the research query.
+    """Generate topic-specific source guidance, grounded in a real web search rather
+    than the model's unverified background knowledge.
 
-    Falls back to the generic instructions if the LLM call fails.
+    Falls back to the generic instructions if either call fails.
     """
-    prompt = f"Topic: {topic_name}\nResearch query: {description}"
+    query = _guidance_research_prompt.format(
+        topic_name=topic_name, description=description or topic_name
+    )
     try:
-        result = await _source_profiler.run(prompt)
+        grounded = await _research(query)
+    except Exception:  # noqa: BLE001
+        logger.warning("source guidance research failed for {!r} — using defaults", topic_name)
+        return _GENERAL_QUERY_INSTRUCTIONS
+    try:
+        result = await _guidance_extractor.run(f"Topic: {topic_name}\n\nResearch:\n{grounded.text}")
         guidance = result.output.strip()
         # Always append the quality exclusions so guidance stays consistent.
         return f"{guidance} {_SOURCE_EXCLUSIONS}"
     except Exception:  # noqa: BLE001
-        logger.warning("source guidance generation failed for {!r} — using defaults", topic_name)
+        logger.warning("source guidance extraction failed for {!r} — using defaults", topic_name)
         return _GENERAL_QUERY_INSTRUCTIONS
 
 

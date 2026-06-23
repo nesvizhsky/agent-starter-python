@@ -15,7 +15,15 @@ import pytest
 
 from agent.services.llm import Research, Source
 from elephant.models import Topic
-from elephant.research import _headline_from_url, _is_hub_page, _parse, _source_from_url, gather
+from elephant.research import (
+    _headline_from_url,
+    _is_hub_page,
+    _parse,
+    _source_from_url,
+    gather,
+    generate_source_guidance,
+    identify_sides,
+)
 
 # ---------------------------------------------------------------------------
 # Offline: parsing helpers
@@ -181,3 +189,41 @@ async def test_gather_returns_articles() -> None:
     articles2 = await gather(topic_with_exclusion)
     source_labels = {a.source for a in articles2}
     assert "LiveScience" not in source_labels
+
+
+@pytest.mark.integration
+async def test_identify_sides_grounded_for_conflict_topic() -> None:
+    """A real conflict topic should return sides with real, named outlets — not an
+    empty list, and not outlets invented without grounding in the research call."""
+    sides = await identify_sides(
+        "Russia's full-scale invasion of Ukraine: military operations, ceasefire "
+        "negotiations, and political developments",
+        "Russia-Ukraine war",
+    )
+    assert len(sides) >= 2, "Expected at least two sides for a named conflict"
+    for side in sides:
+        assert side.name, "Side name should not be empty"
+        assert side.outlets, f"Side {side.name!r} should have at least one outlet"
+
+
+@pytest.mark.integration
+async def test_identify_sides_empty_for_non_conflict_topic() -> None:
+    """A topic with no inherent sides (archaeology) should return an empty list."""
+    sides = await identify_sides(
+        "New archaeological discoveries and excavation findings worldwide",
+        "archaeology news",
+    )
+    assert sides == []
+
+
+@pytest.mark.integration
+async def test_generate_source_guidance_names_real_outlets() -> None:
+    """Guidance should start with 'Prioritise:' and include the standard exclusions,
+    with real outlet names grounded in the research call."""
+    guidance = await generate_source_guidance(
+        "Artificial intelligence safety research: alignment, interpretability, and "
+        "governance developments",
+        "AI safety",
+    )
+    assert guidance.startswith("Prioritise:")
+    assert "YouTube" in guidance  # from _SOURCE_EXCLUSIONS, always appended

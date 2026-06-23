@@ -422,3 +422,41 @@ Known trade-off: a background task can still get cut short if the process
 redeploys mid-run — acceptable for now since it's strictly better than the
 previous guaranteed-timeout failure mode, but worth hardening later (e.g. a
 shutdown hook that waits for in-flight runs) if it turns out to matter in practice.
+
+## 2026-06-23 17:30 — Built scripts/experiments/ sandbox, then grounded source identification
+
+Wanted a place to compare models/prompts before changing product code — added
+`scripts/experiments/` (sibling to `scripts/tests/`), a plain CLI convention (no
+server — `uv run python scripts/experiments/<name>.py`), with a shared `_harness.py`
+for running candidates and saving timestamped JSON logs to `results/` (gitignored).
+First two experiments: `compare_propaganda_models.py` and `compare_research_models.py`.
+
+Propaganda-analysis comparison (claude-sonnet-4.6 vs opus-4.8, deepseek-r1, grok-4.3)
+across 4 test stories (3 biased + 1 neutral control): Sonnet stayed the most thorough
+analyst — no reason to swap `propaganda.py`'s model. Notably, Qwen's thinking-mode
+models reject pydantic-ai's forced structured-output tool call (400 error) — not
+usable for this pipeline's output_type pattern.
+
+Bigger finding, on source identification: `identify_sides()` and
+`generate_source_guidance()` were both a single ungrounded LLM call asking the model
+to *name* outlets from memory — a real hallucination risk, since a plausible-sounding
+outlet name isn't necessarily real. Tested grounded alternatives (Perplexity Sonar
+tiers, plus Grok/Gemini/DeepSeek/GPT-5.1 via OpenRouter's `:online` plugin) — plain
+`perplexity/sonar` won on cost, reliability, *and* specificity simultaneously. Pricier
+tiers and other providers' `:online` mode added 4-7x cost without naming more accurate
+outlets, and `gemini-3.1-flash-lite:online` silently dropped citations on one query —
+same "looks fine until you check" failure mode that ruled out `sonar-pro-search`.
+
+Rewired both functions to a two-step pattern: ground in `_research()` (sonar) first,
+then a cheap `fast`-tier pass extracts structured output from that real prose — never
+inventing beyond what the search actually returned. Also dropped `_MAX_OUTLETS_PER_SIDE`
+4→3, and the extractor now explicitly excludes wire services (BBC, Reuters, etc.) from
+being attributed to any one side — those stay in the general catch-all query only, per
+the original design intent that was already correct but undocumented.
+
+Caught one flakiness during integration testing: the extraction step occasionally
+returned an empty side list even when the grounded research clearly named multiple
+sides (confirmed by rerunning the same input 3x — always succeeded). Added a one-retry
+safety net on empty extraction in `identify_sides()`, justified by the fact this only
+runs once per topic — cheap insurance against silently leaving a real conflict topic
+side-less for its whole lifetime.
