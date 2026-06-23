@@ -60,6 +60,7 @@ _COMMON_FEED_PATHS = (
     "/feed/",
     "/rss",
     "/rss.xml",
+    "/rss/all",
     "/rss/all/all/",
     "/feeds/posts/default",
 )
@@ -312,6 +313,15 @@ async def _try_sitemap(
 # ---------------------------------------------------------------------------
 
 
+def _looks_like_feed(status_code: int, body_head: str) -> bool:
+    """A 200 + XML content-type alone isn't enough — confirmed against
+    meduza.io's /rss/all/all/, which 200s with an XML content-type but a
+    genuinely empty body (a routing artifact, not a feed). Require an actual
+    root tag in the body itself."""
+    head = body_head.lower()
+    return status_code == 200 and ("<rss" in head or "<feed" in head)
+
+
 async def _discover_rss(client: httpx.AsyncClient, domain: str) -> str | None:
     for path in _COMMON_FEED_PATHS:
         url = f"https://{domain}{path}"
@@ -319,10 +329,7 @@ async def _discover_rss(client: httpx.AsyncClient, domain: str) -> str | None:
             resp = await client.get(url, timeout=_FETCH_TIMEOUT, follow_redirects=True)
         except Exception:  # noqa: BLE001
             continue
-        head = resp.text[:500].lower()
-        if resp.status_code == 200 and (
-            "xml" in resp.headers.get("content-type", "") or "<rss" in head or "<feed" in head
-        ):
+        if _looks_like_feed(resp.status_code, resp.text[:500]):
             return url
     return None
 

@@ -20,6 +20,7 @@ from elephant.fetch import (
     _Candidate,
     _extract_excerpt,
     _localname,
+    _looks_like_feed,
     _parse_dt,
     _parse_feed,
     _parse_url_entry,
@@ -59,6 +60,28 @@ def test_prioritize_news_puts_news_sitemaps_first() -> None:
 def test_prioritize_news_keeps_order_stable_with_no_news_match() -> None:
     urls = ["https://x.com/a.xml", "https://x.com/b.xml"]
     assert _prioritize_news(urls) == urls
+
+
+# ---------------------------------------------------------------------------
+# Offline: feed-discovery acceptance check (regression for the meduza.io bug —
+# a 200 + XML content-type with a genuinely empty body was wrongly accepted)
+# ---------------------------------------------------------------------------
+
+
+def test_looks_like_feed_accepts_real_rss_body() -> None:
+    assert _looks_like_feed(200, '<?xml version="1.0"?><rss version="2.0">') is True
+
+
+def test_looks_like_feed_accepts_real_atom_body() -> None:
+    assert _looks_like_feed(200, '<feed xmlns="http://www.w3.org/2005/Atom">') is True
+
+
+def test_looks_like_feed_rejects_empty_body_despite_200() -> None:
+    assert _looks_like_feed(200, "") is False
+
+
+def test_looks_like_feed_rejects_non_200() -> None:
+    assert _looks_like_feed(404, '<rss version="2.0">') is False
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +291,20 @@ async def test_fetch_recent_tass_recovers_titles() -> None:
     for a in articles:
         # A recovered title is real prose, not the URL-derived numeric-ID fallback.
         assert not a.headline.isdigit(), f"Got an unrecovered fallback headline: {a.headline!r}"
+
+
+@pytest.mark.integration
+async def test_fetch_recent_meduza_finds_real_feed_not_empty_routing_artifact() -> None:
+    """Regression test: meduza.io's /rss/all/all/ 200s with an XML content-type but
+    a genuinely empty body — _looks_like_feed() must reject it and discovery must
+    keep trying until it finds the real /rss/all feed. Found via a live test against
+    a real tracked topic in the dev bot's database, not a synthetic case."""
+    since = datetime.now(UTC) - timedelta(hours=72)
+    articles = await fetch_recent(
+        "медуза", "Russia-Ukraine war", "military operations and political developments", since
+    )
+    assert articles is not None, "Meduza should have a usable RSS feed"
+    assert len(articles) > 0, "Meduza publishes daily on this topic — zero is a regression"
 
 
 @pytest.mark.integration
