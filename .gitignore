@@ -21,6 +21,9 @@ logs/
 # Demo output
 ideas/
 
+# Experiment run logs (regenerated each run, not source)
+scripts/experiments/results/
+
 # Caches
 .pytest_cache/
 .ruff_cache/
