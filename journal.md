@@ -536,3 +536,27 @@ Extracted `_extract_excerpt(html) -> str | None` as a pure function (matching
 the rest of the module's pattern of separating parsing from the network call)
 so the regex logic has offline test coverage instead of only being exercised
 by a live HTTP integration test.
+
+## 2026-06-23 22:05 — ria.ru / rbc.ru fetch.py failures: two different causes, neither a code bug
+
+While running fetch.py against the real "Russia-Ukraine" topic (риа новости,
+рбк tracked as sources), both fell back to Perplexity instead of direct fetch.
+Investigated rather than assumed:
+
+- **ria.ru**: resolves to 127.0.0.1 via this machine's local DNS — confirmed
+  it's NOT a global block by querying Cloudflare's (1.1.1.1) and Google's
+  (8.8.8.8) public DNS-over-HTTPS directly, both returned a real IP
+  (194.190.139.47), and `curl --resolve` to that IP got a clean 200. This is
+  sanctions-related DNS filtering specific to this network/ISP, not a problem
+  with the site or with `resolve_domain()`. Decision: don't build around it —
+  verify once deployed to Railway, where this filtering almost certainly
+  doesn't apply, rather than adding complexity (e.g. forcing a public DNS
+  resolver in httpx) for a problem that's local-machine-specific.
+- **rbc.ru**: a real anti-bot wall — 307-redirects to a UUID-suffixed
+  challenge URL that returns 401, and a full real-browser User-Agent string
+  didn't help either, so it's deeper than a UA check (likely JS-challenge or
+  IP-reputation based). Decision: don't try to evade this — that's the site
+  deliberately blocking automated access, a different thing from "couldn't
+  reach a real public feed." Left it to the existing Perplexity fallback,
+  which should cover a mainstream outlet like RBC reasonably (this isn't the
+  obscure-state-media case Perplexity specifically struggles with).
