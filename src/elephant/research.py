@@ -521,14 +521,33 @@ _sides_research_prompt = (
     "per party that are specifically state-aligned, party-aligned, or otherwise formally "
     "affiliated with that party's position — not just outlets that happen to share a "
     "general editorial leaning on the subject.\n\n"
-    "Answer NO and name NO sides if: the topic is broad, general, or worldwide in scope and "
-    "only some narrow regional or topical slice of it touches a conflict (e.g. 'archaeology "
+    "DECISION TEST: ask whether there is ONE country/organization whose internal power "
+    "struggle — current leadership/government vs. a named rival faction or opposition "
+    "movement — is the THREAD running through every aspect the topic mentions. If yes, "
+    "every other aspect listed (elections, protests, sanctions, foreign relations, economic "
+    "impact) is a CONSEQUENCE of that same power struggle, not an unrelated topic, even "
+    "though it also involves other countries. A government facing sanctions, contested "
+    "elections, and street protests over the SAME power struggle is one story with sides —"
+    " do not be talked out of this just because sanctions/foreign relations technically "
+    "involve other countries too; ask whether they exist BECAUSE OF the domestic power "
+    "struggle (then: same dispute, has sides) or are unrelated to it (then: judge that "
+    "aspect separately). Worked example: 'Belarus: political and economic developments, "
+    "including elections, protests, sanctions, and relations with Russia and Western "
+    "countries' passes this test — every aspect listed is a consequence of the SAME "
+    "Lukashenko-government-vs-opposition power struggle (contested elections, the "
+    "resulting protests, the resulting Western sanctions). This SHOULD get sides "
+    "(Government of Belarus vs. the named opposition movement).\n\n"
+    "Answer NO and name NO sides only if: the topic is broad, general, or worldwide in scope "
+    "and only some narrow regional or topical slice of it touches a conflict (e.g. 'archaeology "
     "news worldwide' should NOT get sides just because some archaeological sites sit in "
     "conflict zones — that's a tangential intersection, not what the topic is about); OR "
-    "the topic is a subject, debate, or policy area with many viewpoints but no one specific "
-    "named dispute (e.g. 'AI trends', 'environmental news', general technology or science "
-    "topics) — a spectrum of editorial opinions or ideological leanings is NOT the same "
-    "thing as a conflict's sides, even if real outlets exist at every point on that spectrum."
+    "the topic's several aspects fail the decision test above — they are genuinely "
+    "independent of each other with no single power struggle connecting them (e.g. 'AI "
+    "trends' covers model releases, regulation, and applications — these are separate "
+    "subjects with no shared adversarial dispute, each with its own spectrum of editorial "
+    "opinions) — a spectrum of editorial opinions or ideological leanings, by itself, is "
+    "NOT the same thing as a conflict's sides, even if real outlets exist at every point "
+    "on that spectrum."
 )
 
 _sides_extractor: Agent[None, _SidesOutput] = Agent(
@@ -570,25 +589,38 @@ _sides_extractor: Agent[None, _SidesOutput] = Agent(
 )
 
 
+_SIDES_RESEARCH_ATTEMPTS = 3
+
+
 async def identify_sides(description: str, topic_name: str) -> list[Side]:
     """Identify the distinct parties/perspectives in a topic, each with example outlets,
     grounded in a real web search rather than the model's unverified background knowledge.
 
-    Returns an empty list for topics with no inherent sides, or if either call fails.
-    This only runs once per topic (creation, or a description edit), so a retry on an
-    empty extraction is cheap insurance against a one-off flaky structured-output call
-    silently leaving a real conflict topic side-less for its whole lifetime.
+    Returns an empty list for topics with no inherent sides, or if every attempt fails.
+    This only runs once per topic (creation, or a description edit), so retrying is cheap
+    insurance against a flaky live call.
+
+    Retries the WHOLE research+extraction pipeline, not just extraction — the actual
+    yes/no judgment lives in the research() call itself (a fresh live web search each
+    time), and it's genuinely non-deterministic for borderline topics. Confirmed live:
+    "Belarus: elections, protests, sanctions, and relations with Russia/the West" — a
+    topic that very much DOES have two real sides (government vs. opposition) — landed
+    on "no sides" 2 of 3 times even after tightening the prompt, because the research
+    step itself sometimes judges the topic "too broad/multidimensional" and sometimes
+    correctly recognizes those aspects as facets of one conflict. Retrying only the
+    extraction step (the old behavior) can't fix this, since extraction is just reading
+    whatever the research call already concluded.
     """
-    query = _sides_research_prompt.format(
-        topic_name=topic_name, description=description or topic_name
-    )
-    try:
-        grounded = await _research(query)
-    except Exception:  # noqa: BLE001
-        logger.warning("side research failed for {!r} — assuming none", topic_name)
-        return []
-    prompt = f"Topic: {topic_name}\n\nResearch:\n{grounded.text}"
-    for attempt in range(2):
+    for attempt in range(_SIDES_RESEARCH_ATTEMPTS):
+        query = _sides_research_prompt.format(
+            topic_name=topic_name, description=description or topic_name
+        )
+        try:
+            grounded = await _research(query)
+        except Exception:  # noqa: BLE001
+            logger.warning("side research attempt {} failed for {!r}", attempt + 1, topic_name)
+            continue
+        prompt = f"Topic: {topic_name}\n\nResearch:\n{grounded.text}"
         try:
             result = await _sides_extractor.run(prompt)
             if result.output.sides:

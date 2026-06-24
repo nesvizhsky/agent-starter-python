@@ -1105,3 +1105,44 @@ topic's generated outlets (Journal of Archaeological Research, Antiquity,
 Archaeology, ScienceDaily): 35 articles gathered vs. ~8-10 from the general
 query alone — confirming the comprehensiveness gap is closed without any
 user action required.
+
+## 2026-06-25 00:15 — Fixed the long-deferred Belarus Politics sides flakiness
+
+Side investigation while reviewing the production backfill dry run: user
+asked why "Belarus Politics" had no sides, when it obviously has a
+government-vs-opposition dynamic. Traced it to the exact mechanism behind a
+flakiness issue that had been deferred earlier in this project (memory note:
+"Belarus Politics flakiness — sometimes lands empty even though it genuinely
+has two real sides"). Ran the real grounded research() call directly: it
+explicitly said "NO", reasoning the topic is "broad... covering a spectrum
+of political dynamics... not centrally about one dispute" — even while
+naming the Lukashenko-vs-opposition conflict in its own text. The "broad/
+multidimensional → no sides" rule (added earlier this session specifically
+to stop "Israel vs. Hamas" attaching to a worldwide archaeology topic) was
+too blunt: it didn't distinguish "many UNRELATED angles" (AI trends) from
+"many angles that are all consequences of ONE underlying conflict" (Belarus:
+elections, protests, sanctions, and foreign relations are all facets of the
+same Lukashenko-opposition struggle).
+
+First fix attempt (an abstract clarifying rule) didn't move the needle —
+the model kept re-deriving "these are independent issues" even with the
+distinction spelled out. Replaced it with a concrete DECISION TEST framed as
+a question to answer ("is there one power struggle that every other aspect
+is a CONSEQUENCE of?") plus Belarus itself as a worked positive example
+directly in the prompt. This worked some of the time but not reliably —
+confirmed via 3 repeated live calls: 1 got real sides, 2 came back empty.
+
+Root cause of the residual flakiness: the existing retry logic only retried
+the EXTRACTION step (reading a research result that already happened), not
+the research() call itself — but the actual yes/no judgment lives in
+research(), a fresh live web search each time with real variance. Retrying
+extraction on a research text that already said "no" can't recover
+anything. Rewrote identify_sides() to retry the WHOLE research+extraction
+pipeline up to 3 times (was: 1 research call + 2 extraction attempts on the
+same result). Verified: Belarus now gets real sides 2 of 3 times instead of
+~0 of 3 — a clear improvement, though still not fully deterministic, since
+this is genuine model judgment variance on a legitimately borderline
+framing, not a bug with a clean fix. Verified the original false-positive
+guards (AI Trends, Environmental News, worldwide Archaeology) still
+correctly stay empty across repeated runs — the fix didn't reopen the
+over-eager attribution problem it was layered on top of.
