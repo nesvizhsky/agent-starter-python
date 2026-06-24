@@ -825,3 +825,39 @@ in the dev DB: topic "Влияние войны" had one source entry equal to
 `"ria.ru\ntass.ru\nrt.ru\nkommersant.ru\nrbc.ru\nmeduza.io"` — ran
 `_split_sources()` against it directly and wrote the corrected 6-source list
 back, verified in the DB before restarting the bot.
+
+## 2026-06-24 18:15 — Found why "language doesn't change": translation truncation, permanently cached
+
+User tested in production after deploy: language was still showing English
+everywhere despite the user's profile correctly set to "Russian" in the DB
+(checked directly — not a data bug). Checked production logs for the
+specific "UI translation failed" warning `_ensure_ui()` already logs on
+failure: `"UI translation failed for Russian (Unterminated string starting
+at: line 1 column 5442 (char 5441))"`. Root cause: `_UI` had grown to 119
+keys across this session's localization work — too much for one LLM call's
+output, so the response got cut off mid-JSON, `json.loads()` failed, and the
+existing `except` block fell back to `_ui_cache[lang] = _UI` (the English
+dict) — **permanently**, for the rest of that process's lifetime, since
+`_ensure_ui()` short-circuits on `if lang in _ui_cache: return` with no
+expiry and no retry. One transient truncation = stuck in English forever
+(until next deploy/restart).
+
+Fixed by batching: split `_UI` into chunks of `_UI_BATCH_SIZE = 20` keys,
+translate each batch with its own LLM call (run concurrently via
+`asyncio.gather`), one retry per batch on failure, and only fall back to
+English per-key for whichever specific keys still failed after the retry —
+never the whole language. Verified 3x against the live 119-key dict: 0
+keys fell back each time (one run even hit a transient batch-level
+truncation on attempt 1, and the retry caught it cleanly).
+
+Also addressed a second report from the same test session: tapped
+"Continue" during /add_topic while a digest was running concurrently, and
+got no response for ~2 minutes — wanted some acknowledgment that the tap
+registered. Checked for the most common cause (a blocking synchronous call
+that would stall the whole event loop) — found none; the DB pool and all
+LLM/HTTP calls are properly async, so I couldn't conclusively root-cause
+the delay itself. Added `_with_quick_step_reminder()` (same pattern as the
+digest progress message, just an 8s threshold instead of 60s, since this
+navigation step normally completes instantly) to the "Continue" step
+specifically, so a recurrence at least produces a visible "still working"
+message instead of silence.

@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import json
 import re
+from collections.abc import Coroutine
 from urllib.parse import urlparse
 
 from loguru import logger
@@ -105,6 +106,28 @@ async def _run_digest_with_progress(topic: Topic, bot: Bot, chat_id: int, lang: 
         with contextlib.suppress(Exception):
             await bot.send_message(chat_id, _t(lang, "still_running"))
     await digest_task  # propagates any exception to the caller's own try/except
+
+
+_QUICK_STEP_REMINDER_AFTER = 8.0  # seconds — these steps normally complete instantly
+
+
+async def _with_quick_step_reminder[T](
+    coro: Coroutine[object, object, T], bot: Bot, chat_id: int, lang: str
+) -> T:
+    """For navigation steps that should be near-instant (no LLM calls) — if one
+    is unexpectedly still running after _QUICK_STEP_REMINDER_AFTER seconds (e.g.
+    event-loop contention from another heavy operation running concurrently),
+    say so instead of leaving the user wondering whether their tap registered
+    at all. A user reported exactly this: tapped "Continue" while a digest was
+    running elsewhere, saw nothing for ~2 minutes, and only found out it had
+    worked once the delayed response finally arrived.
+    """
+    task = asyncio.ensure_future(coro)
+    done, _pending = await asyncio.wait({task}, timeout=_QUICK_STEP_REMINDER_AFTER)
+    if task not in done:
+        with contextlib.suppress(Exception):
+            await bot.send_message(chat_id, _t(lang, "still_running"))
+    return await task
 
 
 # ---------------------------------------------------------------------------
@@ -328,14 +351,20 @@ _TIMEZONES = [
 _lang_cache: dict[int, str] = {}
 
 
-async def _ensure_ui(lang: str) -> None:
-    """Translate all UI strings to *lang* on first use — one LLM batch call per language.
+# Keep each translation call's output comfortably within the model's output
+# limit. _UI has grown well past what fit in one call — a single call for all
+# of it started getting truncated mid-JSON (confirmed in production: "UI
+# translation failed for Russian (Unterminated string...)"), and a single
+# failure used to poison the ENTIRE language as English for the rest of the
+# process's life, with no retry, ever. Batching bounds the blast radius of any
+# one failure to ~_UI_BATCH_SIZE keys instead of all of them.
+_UI_BATCH_SIZE = 20
 
-    Placeholders like {name} or {n} must survive translation intact. We instruct
-    the LLM to preserve them, and fall back to English if the result is unusable.
-    """
-    if lang in _ui_cache:
-        return
+
+async def _translate_batch(lang: str, batch: dict[str, str]) -> dict[str, str]:
+    """Translate one batch of UI strings. Retries once on failure (a single
+    truncation/parse hiccup shouldn't permanently strand ~20 keys in English);
+    returns {} if both attempts fail, so the caller's per-key fallback applies."""
     import json
 
     from pydantic_ai import Agent as _A
@@ -354,21 +383,46 @@ async def _ensure_ui(lang: str) -> None:
             "- Return ONLY valid JSON with the same keys, no extra text or code fences."
         ),
     )
-    try:
-        result = await agent.run(json.dumps(_UI, ensure_ascii=False))
-        raw = result.output.strip()
-        # LLMs sometimes wrap JSON in code fences despite instructions
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        translated = json.loads(raw)
-        _ui_cache[lang] = {k: str(v) for k, v in translated.items() if isinstance(v, str)}
-        # Fill any missing keys with English fallback
-        for k, v in _UI.items():
-            _ui_cache[lang].setdefault(k, v)
-        logger.info("UI translated to {} ({} keys)", lang, len(_ui_cache[lang]))
-    except Exception as exc:
-        logger.warning("UI translation failed for {} ({}), falling back to English", lang, exc)
-        _ui_cache[lang] = _UI
+    payload = json.dumps(batch, ensure_ascii=False)
+    for attempt in range(2):
+        try:
+            result = await agent.run(payload)
+            raw = result.output.strip()
+            # LLMs sometimes wrap JSON in code fences despite instructions
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            translated = json.loads(raw)
+            return {k: str(v) for k, v in translated.items() if isinstance(v, str) and k in batch}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "UI translation batch attempt {} failed for {} ({})", attempt + 1, lang, exc
+            )
+    return {}
+
+
+async def _ensure_ui(lang: str) -> None:
+    """Translate all UI strings to *lang* on first use, in small concurrent
+    batches (see _UI_BATCH_SIZE). Per-key fallback to English for any key
+    whose batch didn't come back translated — never the whole language."""
+    if lang in _ui_cache:
+        return
+    items = list(_UI.items())
+    batches = [dict(items[i : i + _UI_BATCH_SIZE]) for i in range(0, len(items), _UI_BATCH_SIZE)]
+    results = await asyncio.gather(*(_translate_batch(lang, b) for b in batches))
+    merged: dict[str, str] = {}
+    for r in results:
+        merged.update(r)
+    translated_count = len(merged)
+    for k, v in _UI.items():
+        merged.setdefault(k, v)
+    _ui_cache[lang] = merged
+    logger.info(
+        "UI translated to {} ({}/{} keys; {} fell back to English)",
+        lang,
+        translated_count,
+        len(_UI),
+        len(_UI) - translated_count,
+    )
 
 
 def _t(lang: str, key: str, **fmt: object) -> str:
@@ -563,6 +617,13 @@ async def _name_confirmed(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _safe_answer(query)
         name = context.user_data.get("new_topic_name", "") if context.user_data else ""
         await _safe_edit_text(query, f"✓ *{name}*", parse_mode="Markdown")
+    tg = update.effective_user
+    chat = update.effective_chat
+    if tg is not None and chat is not None:
+        lang = await _lang(tg.id)
+        return await _with_quick_step_reminder(
+            _ask_sched_type(update, context), context.bot, chat.id, lang
+        )
     return await _ask_sched_type(update, context)
 
 
