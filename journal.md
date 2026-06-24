@@ -943,3 +943,29 @@ already pre-cached at module load, no LLM call needed — and Russian) in
 Confirmed the same in dev: the "UI translated to Russian" log line now
 appears right after "starting elephant bot", before any command is
 possible.
+
+## 2026-06-24 19:28 — Russian-language input biased source-finding toward Russian outlets
+
+User: created a new "general" archaeology topic, but the digest's sources
+skewed Russian (TSN.ua, Izvestia). Checked the topic's stored guidance
+directly: "Prioritise: Archaeolog.ru, New-Science.ru, Historyrussia.org,
+Scanos.ru..." — a real side effect of an earlier fix from this session.
+Making `expand_query()`/`_name_agent` preserve the user's input language
+(so a Russian description displays in Russian, which the user explicitly
+wanted) means the topic's *stored* `description` is in Russian — and
+`generate_source_guidance()`'s grounding `research()` call uses that same
+description as its search query. Verified directly: querying Perplexity
+with the Russian-language topic name/description produced a response
+literally headed "Top Russian Outlets" — Perplexity's search naturally
+follows the query's language, regardless of the prompt's English
+instructions about what to prioritise.
+
+Fixed by explicitly telling the grounding prompt that the topic's
+language is not a signal about which country/region it's about, and to
+treat it as general/international unless the topic is *itself*,
+substantively, about one specific place. Verified directly against the
+exact Russian input that triggered the report — 2 runs both led with
+genuine international specialists (Nature, Science, Antiquity, BBC),
+with the Russian institute correctly demoted to "also include" rather
+than dominating. Applied the same instruction to `_sides_research_prompt`
+for consistency, since the same bias risk applies there.
