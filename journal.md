@@ -739,3 +739,32 @@ plain whitespace, since some outlets are legitimately multi-word names
 ("Al Jazeera", "The Guardian"). Created `scripts/tests/test_elephant_bot.py`
 (bot.py had no offline tests at all before this) with the newline case as
 the primary regression test.
+
+## 2026-06-24 17:05 — Full localization audit: every command, not just /add_topic
+
+User: "language often appears english while doing different commands." Did a
+systematic pass over the entire file — every command handler, every topic-card
+button, every inline awaiting_* text flow, every confirmation message. Found
+and fixed:
+
+- `cmd_topics` called `store.get_user_language()` directly instead of
+  `_lang()`, skipping `_ensure_ui()` — any `_t()` call in that handler would
+  silently fall back to English if the cache wasn't already warmed by an
+  earlier command in the session.
+- `_topic_card`/`_topic_card_expanded` button labels (Check now, Edit, Pause/
+  Resume, Rename, Query, Sources, Reset, Close) were all hardcoded English,
+  even though both functions already accepted a `lang` parameter — it just
+  wasn't being used for the buttons, only the card text.
+- `_show_sources_view` took no `lang` parameter at all.
+- `_topic_picker` took a raw English `prompt` string from each of its 6 call
+  sites (pause/resume/delete/reset/check) instead of a `_UI` key.
+- `cmd_pause`, `cmd_resume`, `cmd_rename`, `cmd_describe`, `cmd_add_source`,
+  `cmd_del_source`, `on_topic_panel`'s rename/describe/add_src/add_blk/delete
+  branches, `on_topic_delete_confirm`, and every `awaiting_*` text flow in
+  `on_text` — all had hardcoded English confirmation/prompt messages.
+- `on_topic_panel`'s `del_cancel` branch called `_topic_card_expanded(topic)`
+  with no `lang` arg at all (silently defaulting to English).
+
+Added 45 new `_UI` keys (118 total, up from 73). Verified all translate
+correctly to Russian with placeholders intact via a direct `_ensure_ui()`
+check before restarting the dev bot.

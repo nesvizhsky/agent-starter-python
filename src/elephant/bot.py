@@ -230,6 +230,52 @@ _UI: dict[str, str] = {
     "topic_created": "🎉 *Topic created: {name}*\n━━━━━━━━━━━━━━━\n🗓 {label}  ·  {tz}\n📰 Sources: {sources}",  # noqa: E501
     "timeout_msg": "Timed out waiting for a reply. Send /add\\_topic to start again.",
     "still_running": "⏳ Still working — topics with a lot of sources can take a few minutes. Hang tight!",  # noqa: E501
+    "not_open_public": "This bot isn't open to the public yet.",
+    "pause_which": "Which topic to pause?",
+    "resume_which": "Which topic to resume?",
+    "delete_which": "Which topic do you want to delete?",
+    "reset_which": "Reset which topic?",
+    "check_which": "Which topic?",
+    "paused_confirm": "⏸ *{name}* paused.",
+    "resumed_confirm": "▶ *{name}* resumed.",
+    "rename_usage": "Usage: /rename <current name> | <new short label>\nExample: /rename Russia-Ukraine | War in Ukraine",  # noqa: E501
+    "rename_need_pipe": "Separate the current name and new label with `|`.\nExample: /rename Russia-Ukraine | War",  # noqa: E501
+    "rename_confirm": "✓ Renamed to *{name}*.",
+    "describe_usage": "Usage: /describe <topic name> | <new research focus>\n\nExample: /describe Ecology | international laws on biodiversity, endangered species, and plastic pollution since 2024",  # noqa: E501
+    "describe_empty": "Please provide a description after the `|`.",
+    "describe_confirm": "✓ *{name}* will now research:\n_{desc}_\n\nUse /reset then /check to fetch fresh results with the new focus.",  # noqa: E501
+    "add_source_usage": "Usage: /add_source <topic name> <source>",
+    "del_source_usage": "Usage: /del_source <topic name> <source>",
+    "source_added": "Added *{source}* to *{name}*.",
+    "source_added_check": "✓ Added *{source}* to *{name}*.",
+    "source_removed": "Removed *{source}* from *{name}*.",
+    # Topic card buttons
+    "btn_edit": "✏️ Edit",
+    "btn_pause": "⏸ Pause",
+    "btn_resume": "▶ Resume",
+    "btn_card_rename": "✏️ Rename",
+    "btn_query": "🔍 Query",
+    "btn_sources": "📚 Sources",
+    "btn_reset": "🔄 Reset",
+    "btn_close": "✕ Close",
+    "btn_yes_delete": "Yes, delete",
+    "btn_cancel": "Cancel",
+    # on_topic_panel prompts
+    "rename_prompt_named": "Type the new name for *{name}*:\n_(/cancel to abort)_",
+    "describe_prompt": "*Research query for {name}:*\n_{current}_\n\nType a replacement, or /cancel.",  # noqa: E501
+    "add_src_prompt": "Which domain should *{name}* always check? (e.g. `reuters.com`)\n_/cancel to abort._",  # noqa: E501
+    "add_blk_prompt": "Which domain should *{name}* always ignore? (e.g. `foxnews.com`)\n_/cancel to abort._",  # noqa: E501
+    "delete_confirm_prompt": "Delete *{name}*?\n\nThis removes the topic and all its history.",
+    "deleted_confirm": "✓ *{name}* deleted.",
+    "sources_view_tracked": "*Always check:* {tracked}",
+    "sources_view_ignored": "*Always ignore:* {ignored}",
+    "sources_view_none": "_none_",
+    "sources_view_help": "_Tracked sources are queried by name every run. Ignored sources are never used, even if found by the general search._",  # noqa: E501
+    "btn_always_check": "➕ Always check",
+    "btn_always_ignore": "🚫 Always ignore",
+    "rename_inline_confirm": "✓ *{old}* renamed to *{new}*.",
+    "block_added_confirm": "✓ *{domain}* will be ignored for *{name}*.",
+    "default_help": "Use commands to interact:\n/add\\_topic · /topics · /check · /pause · /resume",  # noqa: E501
 }
 
 # Two-level cache: {lang: {key: translated_string}}
@@ -357,7 +403,8 @@ async def _allowed(update: Update) -> bool:
     user = update.effective_user
     if allow and (user is None or user.id not in allow):
         if update.message:
-            await update.message.reply_text("This bot isn't open to the public yet.")
+            lang = await _lang(user.id) if user else "English"
+            await update.message.reply_text(_t(lang, "not_open_public"))
         return False
     return True
 
@@ -442,7 +489,7 @@ async def on_start_nav(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
                 await query.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")  # type: ignore[union-attr]
 
     elif action == "check":
-        await _topic_picker(update, tg_id, "check", "Which topic?")
+        await _topic_picker(update, tg_id, "check", "check_which")
 
 
 # ---------------------------------------------------------------------------
@@ -1221,22 +1268,23 @@ async def _topic_picker(
     update: Update,
     telegram_id: int,
     action: str,
-    prompt: str,
+    prompt_key: str,
 ) -> None:
-    """Send an inline keyboard listing all topics for the given action."""
+    """Send an inline keyboard listing all topics for the given action.
+    prompt_key is a _UI key, not raw text, so the prompt is localized."""
+    lang = await _lang(telegram_id)
     topics = await store.get_topics(telegram_id)
     if not topics:
         if update.message:
-            await update.message.reply_text(
-                "You have no topics yet. Use /add\\_topic to create one.",
-                parse_mode="Markdown",
-            )
+            await update.message.reply_text(_t(lang, "no_topics"), parse_mode="Markdown")
         return
     buttons = [
         [InlineKeyboardButton(t.shown_name, callback_data=f"ta:{action}:{t.id}")] for t in topics
     ]
     if update.message:
-        await update.message.reply_text(prompt, reply_markup=InlineKeyboardMarkup(buttons))
+        await update.message.reply_text(
+            _t(lang, prompt_key), reply_markup=InlineKeyboardMarkup(buttons)
+        )
 
 
 async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1292,12 +1340,16 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif action == "delete":
         await _safe_edit_text(
             query,
-            f"Delete *{_short(topic.name)}*?\n\nThis removes the topic and all its history.",
+            _t(ul, "delete_confirm_prompt", name=_short(topic.name)),
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
-                        InlineKeyboardButton("Yes, delete", callback_data=f"td:confirm:{topic.id}"),
-                        InlineKeyboardButton("Cancel", callback_data=f"td:cancel:{topic.id}"),
+                        InlineKeyboardButton(
+                            _t(ul, "btn_yes_delete"), callback_data=f"td:confirm:{topic.id}"
+                        ),
+                        InlineKeyboardButton(
+                            _t(ul, "btn_cancel"), callback_data=f"td:cancel:{topic.id}"
+                        ),
                     ]
                 ]
             ),
@@ -1330,7 +1382,9 @@ async def on_topic_delete_confirm(update: Update, _ctx: ContextTypes.DEFAULT_TYP
         return
 
     await store.delete_topic(topic.id)
-    await _safe_edit_text(query, f"✓ *{_short(topic.name)}* deleted.", parse_mode="Markdown")
+    await _safe_edit_text(
+        query, _t(ul_del, "deleted_confirm", name=_short(topic.name)), parse_mode="Markdown"
+    )
 
 
 async def on_profile_tz_set(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1348,7 +1402,7 @@ async def on_profile_tz_set(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> 
     await _safe_edit_text(query, _t(lang, "tz_set_confirm", label=label))
 
 
-async def _show_sources_view(query: object, topic: Topic) -> None:
+async def _show_sources_view(query: object, topic: Topic, lang: str = "English") -> None:
     """Edit the current message to show the sources management view for *topic*."""
     from telegram import CallbackQuery as CQ
 
@@ -1356,15 +1410,13 @@ async def _show_sources_view(query: object, topic: Topic) -> None:
     tid = str(topic.id)
     tracked = topic.sources
     ignored = topic.excluded_sources
+    none_lbl = _t(lang, "sources_view_none")
 
     lines: list[str] = []
-    lines.append("*Always check:* " + (", ".join(tracked) if tracked else "_none_"))
-    lines.append("*Always ignore:* " + (", ".join(ignored) if ignored else "_none_"))
+    lines.append(_t(lang, "sources_view_tracked", tracked=", ".join(tracked) or none_lbl))
+    lines.append(_t(lang, "sources_view_ignored", ignored=", ".join(ignored) or none_lbl))
     lines.append("")
-    lines.append(
-        "_Tracked sources are queried by name every run. "
-        "Ignored sources are never used, even if found by the general search._"
-    )
+    lines.append(_t(lang, "sources_view_help"))
     msg = "\n".join(lines)
 
     rows: list[list[InlineKeyboardButton]] = []
@@ -1375,11 +1427,11 @@ async def _show_sources_view(query: object, topic: Topic) -> None:
         rows.append([InlineKeyboardButton(f"🚫 {s}", callback_data=f"tp:rm_blk:{tid}:{i}")])
     rows.append(
         [
-            InlineKeyboardButton("➕ Always check", callback_data=f"tp:add_src:{tid}"),
-            InlineKeyboardButton("🚫 Always ignore", callback_data=f"tp:add_blk:{tid}"),
+            InlineKeyboardButton(_t(lang, "btn_always_check"), callback_data=f"tp:add_src:{tid}"),
+            InlineKeyboardButton(_t(lang, "btn_always_ignore"), callback_data=f"tp:add_blk:{tid}"),
         ]
     )
-    rows.append([InlineKeyboardButton("← Back", callback_data=f"tp:back:{tid}")])
+    rows.append([InlineKeyboardButton(_t(lang, "nav_back"), callback_data=f"tp:back:{tid}")])
     await _safe_edit_text(q, msg, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 
@@ -1471,7 +1523,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context.user_data["awaiting_rename_id"] = str(topic.id)
             context.user_data["awaiting_rename_name"] = topic.name
         await query.message.reply_text(  # type: ignore[union-attr]
-            f"Type the new name for *{_short(topic.name)}*:\n_(/cancel to abort)_",
+            _t(lang, "rename_prompt_named", name=_short(topic.name)),
             parse_mode="Markdown",
         )
 
@@ -1481,12 +1533,12 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             context.user_data["awaiting_describe_name"] = topic.name
         current = topic.description or topic.name
         await query.message.reply_text(  # type: ignore[union-attr]
-            f"*Research query for {_short(topic.name)}:*\n_{current}_\n\nType a replacement, or /cancel.",  # noqa: E501
+            _t(lang, "describe_prompt", name=_short(topic.name), current=current),
             parse_mode="Markdown",
         )
 
     elif action == "sources":
-        await _show_sources_view(query, topic)
+        await _show_sources_view(query, topic, lang)
 
     elif action == "rm_src":
         idx_str = (query.data or "").split(":", 3)[3]
@@ -1498,14 +1550,14 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             pass
         refreshed = await store.get_topic(query.from_user.id, topic.id)
         if refreshed:
-            await _show_sources_view(query, refreshed)
+            await _show_sources_view(query, refreshed, lang)
 
     elif action == "add_src":
         if context.user_data is not None:
             context.user_data["awaiting_source_id"] = str(topic.id)
             context.user_data["awaiting_source_name"] = topic.name
         await query.message.reply_text(  # type: ignore[union-attr]
-            f"Which domain should *{_short(topic.name)}* always check? (e.g. `reuters.com`)\n_/cancel to abort._",  # noqa: E501
+            _t(lang, "add_src_prompt", name=_short(topic.name)),
             parse_mode="Markdown",
         )
 
@@ -1519,14 +1571,14 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             pass
         refreshed = await store.get_topic(query.from_user.id, topic.id)
         if refreshed:
-            await _show_sources_view(query, refreshed)
+            await _show_sources_view(query, refreshed, lang)
 
     elif action == "add_blk":
         if context.user_data is not None:
             context.user_data["awaiting_block_id"] = str(topic.id)
             context.user_data["awaiting_block_name"] = topic.name
         await query.message.reply_text(  # type: ignore[union-attr]
-            f"Which domain should *{_short(topic.name)}* always ignore? (e.g. `foxnews.com`)\n_/cancel to abort._",  # noqa: E501
+            _t(lang, "add_blk_prompt", name=_short(topic.name)),
             parse_mode="Markdown",
         )
 
@@ -1545,14 +1597,16 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif action == "delete":
         await _safe_edit_text(
             query,
-            f"Delete *{_short(topic.name)}*?\n\nThis removes the topic and all its history.",
+            _t(lang, "delete_confirm_prompt", name=_short(topic.name)),
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
-                            "Yes, delete", callback_data=f"tp:del_confirm:{topic.id}"
+                            _t(lang, "btn_yes_delete"), callback_data=f"tp:del_confirm:{topic.id}"
                         ),
-                        InlineKeyboardButton("Cancel", callback_data=f"tp:del_cancel:{topic.id}"),
+                        InlineKeyboardButton(
+                            _t(lang, "btn_cancel"), callback_data=f"tp:del_cancel:{topic.id}"
+                        ),
                     ]
                 ]
             ),
@@ -1562,10 +1616,12 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif action == "del_confirm":
         name = topic.name
         await store.delete_topic(topic.id)
-        await _safe_edit_text(query, f"✓ *{_short(name)}* deleted.", parse_mode="Markdown")
+        await _safe_edit_text(
+            query, _t(lang, "deleted_confirm", name=_short(name)), parse_mode="Markdown"
+        )
 
     elif action == "del_cancel":
-        text, keyboard = _topic_card_expanded(topic)
+        text, keyboard = _topic_card_expanded(topic, lang)
         await _safe_edit_text(query, text, reply_markup=keyboard, parse_mode="Markdown")
 
 
@@ -1587,8 +1643,8 @@ def _topic_card(t: Topic, lang: str = "English") -> tuple[str, InlineKeyboardMar
     keyboard = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("▶ Check now", callback_data=f"tp:check:{tid}"),
-                InlineKeyboardButton("✏️ Edit", callback_data=f"tp:edit:{tid}"),
+                InlineKeyboardButton(_t(lang, "btn_check_now"), callback_data=f"tp:check:{tid}"),
+                InlineKeyboardButton(_t(lang, "btn_edit"), callback_data=f"tp:edit:{tid}"),
             ]
         ]
     )
@@ -1598,25 +1654,25 @@ def _topic_card(t: Topic, lang: str = "English") -> tuple[str, InlineKeyboardMar
 def _topic_card_expanded(t: Topic, lang: str = "English") -> tuple[str, InlineKeyboardMarkup]:
     """Expanded card — all management buttons + a Close row."""
     tid = str(t.id)
-    pause_lbl = "▶ Resume" if t.paused else "⏸ Pause"
+    pause_lbl = _t(lang, "btn_resume") if t.paused else _t(lang, "btn_pause")
     pause_act = "resume" if t.paused else "pause"
     keyboard = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("▶ Check now", callback_data=f"tp:check:{tid}"),
+                InlineKeyboardButton(_t(lang, "btn_check_now"), callback_data=f"tp:check:{tid}"),
                 InlineKeyboardButton(pause_lbl, callback_data=f"tp:{pause_act}:{tid}"),
             ],
             [
-                InlineKeyboardButton("✏️ Rename", callback_data=f"tp:rename:{tid}"),
-                InlineKeyboardButton("🔍 Query", callback_data=f"tp:describe:{tid}"),
-                InlineKeyboardButton("📚 Sources", callback_data=f"tp:sources:{tid}"),
+                InlineKeyboardButton(_t(lang, "btn_card_rename"), callback_data=f"tp:rename:{tid}"),
+                InlineKeyboardButton(_t(lang, "btn_query"), callback_data=f"tp:describe:{tid}"),
+                InlineKeyboardButton(_t(lang, "btn_sources"), callback_data=f"tp:sources:{tid}"),
             ],
             [
                 InlineKeyboardButton("📅", callback_data=f"tp:schedule:{tid}"),
-                InlineKeyboardButton("🔄 Reset", callback_data=f"tp:reset:{tid}"),
+                InlineKeyboardButton(_t(lang, "btn_reset"), callback_data=f"tp:reset:{tid}"),
                 InlineKeyboardButton("🗑", callback_data=f"tp:delete:{tid}"),
             ],
-            [InlineKeyboardButton("✕ Close", callback_data=f"tp:close:{tid}")],
+            [InlineKeyboardButton(_t(lang, "btn_close"), callback_data=f"tp:close:{tid}")],
         ]
     )
     return _topic_card_text(t, lang), keyboard
@@ -1629,11 +1685,9 @@ async def cmd_topics(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if tg is None:
         return
     topics = await store.get_topics(tg.id)
-    lang = await store.get_user_language(tg.id)
+    lang = await _lang(tg.id)
     if not topics:
-        await update.message.reply_text(
-            "You have no topics yet. Use /add\\_topic to create one.", parse_mode="Markdown"
-        )
+        await update.message.reply_text(_t(lang, "no_topics"), parse_mode="Markdown")
         return
     await update.message.reply_text(_t(lang, "topics_header", n=len(topics)))
     for t in topics:
@@ -1850,7 +1904,7 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ul = await _lang(tg.id)
     name = " ".join(context.args or []).strip()
     if not name:
-        await _topic_picker(update, tg.id, "check", "Which topic?")
+        await _topic_picker(update, tg.id, "check", "check_which")
         return
     topic = await store.get_topic_by_name(tg.id, name)
     if topic is None:
@@ -1880,11 +1934,11 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ul = await _lang(tg.id)
     name = " ".join(context.args or []).strip()
     if not name:
-        await _topic_picker(update, tg.id, "reset", "Reset which topic?")
+        await _topic_picker(update, tg.id, "reset", "reset_which")
         return
     topic = await store.get_topic_by_name(tg.id, name)
     if topic is None:
-        await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
+        await update.message.reply_text(_t(ul, "no_topic_named", name=name), parse_mode="Markdown")
         return
     n = await store.clear_seen(topic.id)
     await update.message.reply_text(
@@ -1903,32 +1957,29 @@ async def cmd_rename(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     tg = update.effective_user
     if tg is None:
         return
+    lang = await _lang(tg.id)
     args = context.args or []
     if len(args) < 2:
-        await update.message.reply_text(
-            "Usage: /rename <current name> | <new short label>\n"
-            "Example: /rename Russia-Ukraine | War in Ukraine",
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text(_t(lang, "rename_usage"), parse_mode="Markdown")
         return
     raw = " ".join(args)
     if "|" not in raw:
-        await update.message.reply_text(
-            "Separate the current name and new label with `|`.\n"
-            "Example: /rename Russia-Ukraine | War",
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text(_t(lang, "rename_need_pipe"), parse_mode="Markdown")
         return
     old_name, new_name = (p.strip() for p in raw.split("|", 1))
     topic = await store.get_topic_by_name(tg.id, old_name)
     if topic is None:
-        await update.message.reply_text(f"No topic called *{old_name}*.", parse_mode="Markdown")
+        await update.message.reply_text(
+            _t(lang, "no_topic_named", name=old_name), parse_mode="Markdown"
+        )
         return
     updates: dict[str, object] = {"name": new_name}
     if not topic.description:
         updates["description"] = topic.name
     await store.update_topic(topic.id, **updates)
-    await update.message.reply_text(f"✓ Renamed to *{new_name}*.", parse_mode="Markdown")
+    await update.message.reply_text(
+        _t(lang, "rename_confirm", name=new_name), parse_mode="Markdown"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1942,29 +1993,25 @@ async def cmd_describe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     tg = update.effective_user
     if tg is None:
         return
+    lang = await _lang(tg.id)
     args = context.args or []
     raw = " ".join(args)
     if "|" not in raw:
-        await update.message.reply_text(
-            "Usage: /describe <topic name> | <new research focus>\n\n"
-            "Example: /describe Ecology | international laws on biodiversity, "
-            "endangered species, and plastic pollution since 2024",
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text(_t(lang, "describe_usage"), parse_mode="Markdown")
         return
     topic_name, new_desc = (p.strip() for p in raw.split("|", 1))
     if not new_desc:
-        await update.message.reply_text("Please provide a description after the `|`.")
+        await update.message.reply_text(_t(lang, "describe_empty"))
         return
     topic = await store.get_topic_by_name(tg.id, topic_name)
     if topic is None:
-        await update.message.reply_text(f"No topic called *{topic_name}*.", parse_mode="Markdown")
+        await update.message.reply_text(
+            _t(lang, "no_topic_named", name=topic_name), parse_mode="Markdown"
+        )
         return
     await store.update_topic(topic.id, description=new_desc)
     await update.message.reply_text(
-        f"✓ *{topic.name}* will now research:\n_{new_desc}_\n\n"
-        "Use /reset then /check to fetch fresh results with the new focus.",
-        parse_mode="Markdown",
+        _t(lang, "describe_confirm", name=topic.name, desc=new_desc), parse_mode="Markdown"
     )
 
 
@@ -1979,16 +2026,21 @@ async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     tg = update.effective_user
     if tg is None:
         return
+    lang = await _lang(tg.id)
     name = " ".join(context.args or []).strip()
     if not name:
-        await _topic_picker(update, tg.id, "pause", "Which topic to pause?")
+        await _topic_picker(update, tg.id, "pause", "pause_which")
         return
     topic = await store.get_topic_by_name(tg.id, name)
     if topic is None:
-        await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
+        await update.message.reply_text(
+            _t(lang, "no_topic_named", name=name), parse_mode="Markdown"
+        )
         return
     await store.update_topic(topic.id, paused=True)
-    await update.message.reply_text(f"⏸ *{topic.name}* paused.", parse_mode="Markdown")
+    await update.message.reply_text(
+        _t(lang, "paused_confirm", name=topic.name), parse_mode="Markdown"
+    )
 
 
 async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1997,16 +2049,21 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     tg = update.effective_user
     if tg is None:
         return
+    lang = await _lang(tg.id)
     name = " ".join(context.args or []).strip()
     if not name:
-        await _topic_picker(update, tg.id, "resume", "Which topic to resume?")
+        await _topic_picker(update, tg.id, "resume", "resume_which")
         return
     topic = await store.get_topic_by_name(tg.id, name)
     if topic is None:
-        await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
+        await update.message.reply_text(
+            _t(lang, "no_topic_named", name=name), parse_mode="Markdown"
+        )
         return
     await store.update_topic(topic.id, paused=False)
-    await update.message.reply_text(f"▶ *{topic.name}* resumed.", parse_mode="Markdown")
+    await update.message.reply_text(
+        _t(lang, "resumed_confirm", name=topic.name), parse_mode="Markdown"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2020,7 +2077,7 @@ async def cmd_delete_topic(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None
     tg = update.effective_user
     if tg is None:
         return
-    await _topic_picker(update, tg.id, "delete", "Which topic do you want to delete?")
+    await _topic_picker(update, tg.id, "delete", "delete_which")
 
 
 # ---------------------------------------------------------------------------
@@ -2032,39 +2089,47 @@ async def cmd_add_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if update.message is None or not await _allowed(update):
         return
     tg = update.effective_user
+    lang = await _lang(tg.id) if tg else "English"
     if tg is None or not context.args or len(context.args) < 2:
         if update.message:
-            await update.message.reply_text("Usage: /add_source <topic name> <source>")
+            await update.message.reply_text(_t(lang, "add_source_usage"))
         return
     *name_parts, source = context.args
     name = " ".join(name_parts)
     topic = await store.get_topic_by_name(tg.id, name)
     if topic is None:
-        await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
+        await update.message.reply_text(
+            _t(lang, "no_topic_named", name=name), parse_mode="Markdown"
+        )
         return
     if source not in topic.sources:
         await store.update_topic(topic.id, sources=[*topic.sources, source])
-    await update.message.reply_text(f"Added *{source}* to *{topic.name}*.", parse_mode="Markdown")
+    await update.message.reply_text(
+        _t(lang, "source_added", source=source, name=topic.name), parse_mode="Markdown"
+    )
 
 
 async def cmd_del_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None or not await _allowed(update):
         return
     tg = update.effective_user
+    lang = await _lang(tg.id) if tg else "English"
     if tg is None or not context.args or len(context.args) < 2:
         if update.message:
-            await update.message.reply_text("Usage: /del_source <topic name> <source>")
+            await update.message.reply_text(_t(lang, "del_source_usage"))
         return
     *name_parts, source = context.args
     name = " ".join(name_parts)
     topic = await store.get_topic_by_name(tg.id, name)
     if topic is None:
-        await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
+        await update.message.reply_text(
+            _t(lang, "no_topic_named", name=name), parse_mode="Markdown"
+        )
         return
     updated = [s for s in topic.sources if s != source]
     await store.update_topic(topic.id, sources=updated)
     await update.message.reply_text(
-        f"Removed *{source}* from *{topic.name}*.", parse_mode="Markdown"
+        _t(lang, "source_removed", source=source, name=topic.name), parse_mode="Markdown"
     )
 
 
@@ -2119,7 +2184,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         old_name = ud.pop("awaiting_rename_name", "")
         await store.update_topic(topic_id, name=text)
         await update.message.reply_text(
-            f"✓ *{old_name}* renamed to *{text}*.", parse_mode="Markdown"
+            _t(ul, "rename_inline_confirm", old=old_name, new=text), parse_mode="Markdown"
         )
         return
 
@@ -2147,9 +2212,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 topic_id, sides_json=json.dumps([s.model_dump() for s in sides])
             )
         await update.message.reply_text(
-            f"✓ *{topic_name}* will now research:\n_{expanded}_\n\n"
-            "Use /reset then /check to fetch fresh results.",
-            parse_mode="Markdown",
+            _t(ul, "describe_confirm", name=topic_name, desc=expanded), parse_mode="Markdown"
         )
         return
 
@@ -2167,7 +2230,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if domain not in topic.sources:
             await store.update_topic(topic_id, sources=[*topic.sources, domain])
         await update.message.reply_text(
-            f"✓ Added *{domain}* to *{topic_name}*.", parse_mode="Markdown"
+            _t(ul, "source_added_check", source=domain, name=topic_name), parse_mode="Markdown"
         )
         return
 
@@ -2185,14 +2248,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if domain not in topic.excluded_sources:
             await store.update_topic(topic_id, excluded_sources=[*topic.excluded_sources, domain])
         await update.message.reply_text(
-            f"✓ *{domain}* will be ignored for *{topic_name}*.", parse_mode="Markdown"
+            _t(ul, "block_added_confirm", domain=domain, name=topic_name), parse_mode="Markdown"
         )
         return
 
-    await update.message.reply_text(
-        "Use commands to interact:\n/add\\_topic · /topics · /check · /pause · /resume",
-        parse_mode="Markdown",
-    )
+    await update.message.reply_text(_t(ul, "default_help"), parse_mode="Markdown")
 
 
 # ---------------------------------------------------------------------------
