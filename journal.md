@@ -889,3 +889,33 @@ for every test case. Fails open (keeps stories unmerged) if the embed
 call itself errors. Verified the existing real-LLM integration tests
 (distinct articles stay separate, same-event-different-source still
 merges) still pass with this added.
+
+## 2026-06-24 18:45 — Manual checks with nothing new sent no response at all
+
+User: launched a manual check, saw the "searching" status, then it just
+disappeared with no digest, no error, nothing. Checked production logs for
+the exact run — it worked correctly (gathered articles, dedup correctly
+found 0 fresh after the semantic filter) and logged "nothing new ... —
+skipping" — then `_run_digest` just `return`ed. No message was ever sent.
+The caller deletes the "fetching" status message and refreshes the topic
+card, but neither of those is an explicit "we checked, there's nothing new"
+notice, so a correct "nothing to report" outcome was indistinguishable from
+a silent failure.
+
+There's already a `_NO_NEWS_PROMPT` in digest.py that generates exactly the
+right sentence — but it's only reachable from `digest.generate(stories=[])`,
+called after clustering, and `_run_digest` returns *before* ever reaching
+clustering when `dedup.filter_seen()` (or `research.gather()`) comes back
+empty. Fixed: on that early-return path, if `slot is None` (a manual
+/check or "Check now" tap, not a scheduled cron tick), generate and send
+the no-news message anyway. Deliberately scoped to manual checks only —
+notifying on every scheduled tick that finds nothing new would be spammy;
+a user who explicitly asked for a check right now deserves an answer
+either way.
+
+Verified live against the exact production topic that triggered the
+report ("Prehistoric Beliefs" / "Доисторические верования"): first run
+found one real fresh article and sent a normal digest; running it again
+immediately (now correctly deduped) sent "По этой теме новых событий для
+репортажа не обнаружено." — confirmed via a stub Bot that only prints,
+not the real Telegram API, so no live message was sent to the user.

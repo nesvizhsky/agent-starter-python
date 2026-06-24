@@ -15,7 +15,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 
 from elephant import dedup, digest, perspectives, propaganda, research, store
-from elephant.models import Slot, Topic
+from elephant.models import Article, Slot, Topic
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -170,14 +170,24 @@ async def _run_digest(
     lookback_hours = _lookback_hours(topic, slot, now_local)
 
     articles = await research.gather(topic, lookback_hours)
-    if not articles:
-        logger.info("no articles found for {!r}", topic.name)
-        return
+    fresh: list[Article] = []
+    embeddings: list[list[float]] = []
+    if articles:
+        lookback_days = max(1, lookback_hours // 24)
+        fresh, embeddings = await dedup.filter_seen(topic.id, articles, lookback_days)
 
-    lookback_days = max(1, lookback_hours // 24)
-    fresh, embeddings = await dedup.filter_seen(topic.id, articles, lookback_days)
     if not fresh:
-        logger.info("nothing new for {!r} — skipping", topic.name)
+        logger.info("nothing new for {!r}", topic.name)
+        # A manual /check or "Check now" tap — the user is actively waiting for
+        # SOME response; silence here is indistinguishable from broken (reported
+        # in production: "it was showing the searching status but then it
+        # disappeared, and that's it"). Scheduled (cron) ticks stay quiet on
+        # purpose — notifying every time nothing new happened would be spam.
+        if slot is None:
+            language = await store.get_user_language(topic.telegram_id)
+            output = await digest.generate([], topic.feedback_notes, language)
+            await store.stamp_sent(topic.id)
+            await _send_digest(bot, topic, output)
         return
 
     stories = await perspectives.cluster(
