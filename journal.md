@@ -861,3 +861,31 @@ digest progress message, just an 8s threshold instead of 60s, since this
 navigation step normally completes instantly) to the "Continue" step
 specifically, so a recurrence at least produces a visible "still working"
 message instead of silence.
+
+## 2026-06-24 18:25 — Found the real cause of a "duplicate story" report
+
+User reported a digest containing two near-identical "📌" entries — both
+about satellite images of damage to a Voronezh plant, both attributed to
+Meduza, same date, just worded slightly differently. Traced the actual
+pipeline: `dedup.filter_seen()` only compares each new article against the
+*historical* seen corpus (`store.max_similarity`) — it never compares
+articles against each other within the same batch. So two different URLs
+(or even the same article re-summarized) about the same event both pass
+dedup as "fresh", and from there it's entirely up to one clustering LLM
+call (`perspectives.cluster()`) to recognize they're the same event and
+merge them. The clustering prompt already says to merge same-event
+articles regardless of framing, but it's a single judgment call with no
+programmatic backup — and it occasionally misses when two articles from
+the *same* source are worded just differently enough.
+
+Added `_merge_near_duplicate_stories()`: after clustering, embed each
+story's headline+first-source-summary and merge any pair whose cosine
+similarity is ≥0.92 (deliberately higher than dedup's 0.85 seen-article
+threshold — merging two stories is more consequential than dropping one
+already-seen article, so this stays conservative). Split the comparison
+logic into a pure `_merge_stories_by_similarity()` so it's testable
+offline with synthetic embeddings instead of needing a live embed() call
+for every test case. Fails open (keeps stories unmerged) if the embed
+call itself errors. Verified the existing real-LLM integration tests
+(distinct articles stay separate, same-event-different-source still
+merges) still pass with this added.

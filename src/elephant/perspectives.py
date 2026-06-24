@@ -15,7 +15,7 @@ import asyncio
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
-from agent.services.llm import build_model
+from agent.services.llm import build_model, embed
 from elephant.models import Article, Contradiction, Story
 
 # ---------------------------------------------------------------------------
@@ -126,6 +126,17 @@ async def cluster(
     result = await _agent.run(prompt)
     stories = result.output.stories
 
+    # Safety net: dedup.py only checks new articles against *historical* seen
+    # ones, never against each other within this same batch — two articles
+    # about the same event (even from the same source, worded slightly
+    # differently) both pass dedup as "fresh", and the single clustering call
+    # above occasionally splits them into two separate stories instead of one.
+    # Confirmed in production: two Meduza articles about the same satellite
+    # photos of a Voronezh plant, worded just differently enough, became two
+    # stories in one digest. Merge any stories that are still near-duplicates
+    # after clustering.
+    stories = await _merge_near_duplicate_stories(stories)
+
     # Attach research context to each source_view so propaganda.py has
     # richer material than the one-sentence summary alone.
     _attach_contexts(stories, articles)
@@ -136,6 +147,62 @@ async def cluster(
         story.contradictions = contradictions
 
     return stories
+
+
+# ---------------------------------------------------------------------------
+# Post-clustering near-duplicate merge (safety net)
+# ---------------------------------------------------------------------------
+
+# Higher than dedup.py's seen-article threshold (0.85) — merging two stories
+# is more consequential than dropping an already-seen article, so this stays
+# conservative: only merge near-identical stories, not just related ones.
+_STORY_MERGE_THRESHOLD = 0.92
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _merge_stories_by_similarity(
+    stories: list[Story], embeddings: list[list[float]]
+) -> list[Story]:
+    """Pure merge logic, separated from the embed() call so it's testable
+    offline with synthetic embeddings. Merges story j into story i (keeping
+    i's headline) when their embeddings are near-identical, combining
+    source_views and deduping by source name."""
+    merged: list[Story] = []
+    absorbed: set[int] = set()
+    for i, story in enumerate(stories):
+        if i in absorbed:
+            continue
+        existing_sources = {v.source.lower() for v in story.source_views}
+        for j in range(i + 1, len(stories)):
+            if j in absorbed:
+                continue
+            if _cosine_similarity(embeddings[i], embeddings[j]) >= _STORY_MERGE_THRESHOLD:
+                for view in stories[j].source_views:
+                    if view.source.lower() not in existing_sources:
+                        story.source_views.append(view)
+                        existing_sources.add(view.source.lower())
+                absorbed.add(j)
+        merged.append(story)
+    return merged
+
+
+async def _merge_near_duplicate_stories(stories: list[Story]) -> list[Story]:
+    if len(stories) < 2:
+        return stories
+    texts = [f"{s.headline} {s.source_views[0].summary if s.source_views else ''}" for s in stories]
+    try:
+        embeddings = await embed(texts)
+    except Exception:  # noqa: BLE001 — fail open, keep stories unmerged rather than lose them
+        return stories
+    return _merge_stories_by_similarity(stories, embeddings)
 
 
 # ---------------------------------------------------------------------------

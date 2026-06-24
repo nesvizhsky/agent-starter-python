@@ -11,12 +11,27 @@ from __future__ import annotations
 
 import pytest
 
-from elephant.models import Article
-from elephant.perspectives import _format_prompt, cluster
+from elephant.models import Article, SourceView, Story
+from elephant.perspectives import (
+    _cosine_similarity,
+    _format_prompt,
+    _merge_stories_by_similarity,
+    cluster,
+)
 
 
 def _article(url: str, headline: str, source: str) -> Article:
     return Article(url=url, headline=headline, source=source, published_at=None, summary=headline)
+
+
+def _story(headline: str, *sources: str) -> Story:
+    return Story(
+        headline=headline,
+        source_views=[
+            SourceView(source=s, url=f"https://{s.lower()}.example/a", summary=headline)
+            for s in sources
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +56,58 @@ def test_format_prompt_includes_all_articles() -> None:
 async def test_cluster_empty_returns_empty() -> None:
     result = await cluster([])
     assert result == []
+
+
+def test_cosine_similarity_identical_vectors() -> None:
+    assert _cosine_similarity([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
+
+
+def test_cosine_similarity_orthogonal_vectors() -> None:
+    assert _cosine_similarity([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
+
+
+def test_cosine_similarity_zero_vector_returns_zero() -> None:
+    """Guards against a division by zero rather than raising."""
+    assert _cosine_similarity([0.0, 0.0], [1.0, 0.0]) == 0.0
+
+
+def test_merge_stories_combines_near_duplicates() -> None:
+    """Regression: dedup.py only checks new articles against history, never
+    against each other within the same batch — two Meduza articles about the
+    same event, worded just differently enough, both passed clustering as
+    separate stories in production. This merge pass is the safety net."""
+    stories = [
+        _story("Satellite images confirm damage to Voronezh plant", "Meduza"),
+        _story("Satellite images show two buildings damaged at Voronezh facility", "Meduza"),
+    ]
+    # Near-identical embeddings (as a real near-duplicate pair would have)
+    embeddings = [[1.0, 0.0, 0.0], [0.99, 0.01, 0.0]]
+    merged = _merge_stories_by_similarity(stories, embeddings)
+    assert len(merged) == 1
+    assert len(merged[0].source_views) == 1  # same source, deduped
+
+
+def test_merge_stories_keeps_distinct_stories_separate() -> None:
+    stories = [
+        _story("Russia fires missiles at Kyiv", "BBC"),
+        _story("New Neanderthal DNA study published", "ScienceDaily"),
+    ]
+    embeddings = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]  # orthogonal — clearly different
+    merged = _merge_stories_by_similarity(stories, embeddings)
+    assert len(merged) == 2
+
+
+def test_merge_stories_combines_source_views_from_different_sources() -> None:
+    """Same event, different outlets — should merge into one story with both
+    source_views, not dedupe one of them away."""
+    stories = [
+        _story("Russia fires missiles at Kyiv", "BBC"),
+        _story("Russia conducts precision strike on Kyiv", "TASS"),
+    ]
+    embeddings = [[1.0, 0.0], [0.999, 0.001]]
+    merged = _merge_stories_by_similarity(stories, embeddings)
+    assert len(merged) == 1
+    assert {v.source for v in merged[0].source_views} == {"BBC", "TASS"}
 
 
 # ---------------------------------------------------------------------------
