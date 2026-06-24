@@ -969,3 +969,60 @@ genuine international specialists (Nature, Science, Antiquity, BBC),
 with the Russian institute correctly demoted to "also include" rather
 than dominating. Applied the same instruction to `_sides_research_prompt`
 for consistency, since the same bias risk applies there.
+
+## 2026-06-24 19:45 — Same bias, deeper path: the actual news-search query, not just guidance
+
+User retested the same archaeology topic in production — still mostly
+Russian/Ukrainian sources (Ведомости, Известия, ТСН). The earlier fix
+only touched `generate_source_guidance()`'s grounding step (what sources
+to *recommend*); `gather()`'s actual `_query_general()` call — the real
+per-digest news search — separately uses `topic.description` (still
+Russian) directly as Perplexity's query text. Verified directly: an
+English instruction layered ON TOP of an otherwise-Russian-language query
+made things WORSE, not better (Perplexity's search matches on the
+literal query text, not meta-instructions about it — confirmed by
+comparing 10 result URLs with vs. without the added instruction, both
+predominantly Russian/Ukrainian). Translating the query text itself to
+English before searching, though, produced genuinely international
+results (US News, AP News, Phys.org, Sci.News) — a completely different
+mechanism (search engine behavior) from the guidance case (LLM judgment
+following an instruction), which is why the same prompt-instruction fix
+didn't transfer.
+
+Added `_to_english()`: skips the LLM call entirely for already-ASCII text
+(cheap, the common case — most topics are already English), translates
+otherwise, falls back to the original text if translation fails. Wired
+into `gather()` for the general/catch-all query specifically — NOT for
+per-tracked-source queries, since matching a source's own natural
+language there is appropriate (querying TASS in Russian makes sense;
+querying "what's new in archaeology" in Russian doesn't, for a topic
+with no inherent language affinity).
+
+## 2026-06-24 19:50 — Found a real race condition behind "duplicated results"
+
+Same testing session, separate report: the bot sent the same "nothing
+new" response 3 times, and earlier sent real digest content repeatedly.
+Checked production logs: the user tapped "Check" 5 times within 5 minutes
+for one topic, and 3 of those taps sent a FULL digest — each one finding
+"8 fresh articles" via dedup despite a near-identical batch having just
+been sent moments before. Checked `elephant_seen` directly: the *exact
+same* article URL was inserted twice, 40 seconds apart, for the same
+topic_id — a real race, not a content-duplication issue (that's
+perspectives.py's merge step, already fixed separately).
+
+Root cause: `_run_digest()` reads `store.get_seen_urls()` at the START of
+the pipeline but only writes back via `record_seen()` at the very END,
+10-40+ seconds later (after gather + cluster + propaganda + digest
+generation). Two overlapping runs for the same topic both read the same
+"not yet seen" state and both proceed independently — nothing serializes
+concurrent checks on one topic.
+
+Fixed with `_run_digest_guarded()`: a per-topic `asyncio.Lock` (module-
+level dict keyed by topic.id) that makes a second concurrent check for
+the same topic bail out immediately with "already checking this topic"
+instead of racing the first. Wired into all 3 call sites that trigger a
+check (topic picker, topic panel, `/check` command). Added 2 offline
+tests using `monkeypatch` on `jobs._run_digest` to simulate a slow
+pipeline and assert the second concurrent call returns False while the
+first is in flight, and that sequential calls (lock released) both
+succeed normally.

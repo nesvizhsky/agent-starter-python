@@ -15,6 +15,7 @@ import json
 import re
 from collections.abc import Coroutine
 from urllib.parse import urlparse
+from uuid import UUID
 
 from loguru import logger
 from pydantic_ai import Agent
@@ -91,6 +92,28 @@ async def _safe_edit_text(query: CallbackQuery, text: str, **kwargs: object) -> 
 
 
 _PROGRESS_REMINDER_AFTER = 60.0  # seconds
+
+# Per-topic lock so two overlapping "Check" taps for the SAME topic can't run
+# the pipeline concurrently. Without this, two runs starting close together
+# both read store.get_seen_urls() before either has written its results back
+# (record_seen() only happens at the very end, after gather+cluster+digest —
+# 10-40+ seconds later), so both find the same articles "fresh" and both
+# send a digest. Confirmed in production: the exact same article URL written
+# to elephant_seen twice, 40 seconds apart, for one topic — a real race, not
+# a content-duplication issue (that's perspectives.py's merge step instead).
+_topic_check_locks: dict[UUID, asyncio.Lock] = {}
+
+
+async def _run_digest_guarded(topic: Topic, bot: Bot, chat_id: int, lang: str) -> bool:
+    """Run the digest pipeline for *topic*, unless one is already running for
+    it. Returns False (and sends nothing itself) if skipped — the caller
+    should tell the user a check is already in progress."""
+    lock = _topic_check_locks.setdefault(topic.id, asyncio.Lock())
+    if lock.locked():
+        return False
+    async with lock:
+        await _run_digest_with_progress(topic, bot, chat_id, lang)
+    return True
 
 
 async def _run_digest_with_progress(topic: Topic, bot: Bot, chat_id: int, lang: str) -> None:
@@ -254,6 +277,7 @@ _UI: dict[str, str] = {
     "topic_created": "🎉 *Topic created: {name}*\n━━━━━━━━━━━━━━━\n🗓 {label}  ·  {tz}\n📰 Sources: {sources}",  # noqa: E501
     "timeout_msg": "Timed out waiting for a reply. Send /add\\_topic to start again.",
     "still_running": "⏳ Still working — topics with a lot of sources can take a few minutes. Hang tight!",  # noqa: E501
+    "check_already_running": "⏳ Already checking this topic — hang tight, the result is on its way.",  # noqa: E501
     "not_open_public": "This bot isn't open to the public yet.",
     "pause_which": "Which topic to pause?",
     "resume_which": "Which topic to resume?",
@@ -1078,7 +1102,6 @@ async def _update_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     ud = context.user_data
     if ud is None:
         return ConversationHandler.END
-    from uuid import UUID
 
     topic_id = UUID(ud.pop("sched_topic_id", ""))
     tg = update.effective_user
@@ -1393,8 +1416,6 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     _, action, topic_id_str = parts
 
-    from uuid import UUID
-
     ul = await _lang(query.from_user.id)
     topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
     if topic is None:
@@ -1406,7 +1427,9 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             query, _t(ul, "fetch_status", name=topic.shown_name), parse_mode="Markdown"
         )
         try:
-            await _run_digest_with_progress(topic, context.bot, topic.telegram_id, ul)
+            ran = await _run_digest_guarded(topic, context.bot, topic.telegram_id, ul)
+            if not ran:
+                await query.message.reply_text(_t(ul, "check_already_running"))  # type: ignore[union-attr]
         except Exception:  # noqa: BLE001
             logger.exception("picker /check failed for topic {}", topic.id)
             await query.message.reply_text(_t(ul, "err_moment"))  # type: ignore[union-attr]
@@ -1462,8 +1485,6 @@ async def on_topic_delete_confirm(update: Update, _ctx: ContextTypes.DEFAULT_TYP
     if len(parts) != 3:
         return
     _prefix, action, topic_id_str = parts
-
-    from uuid import UUID
 
     ul_del = await _lang(query.from_user.id)
     if action == "cancel":
@@ -1553,8 +1574,6 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await _safe_answer(query, "Running digest…" if action == "check" else "")
 
-    from uuid import UUID
-
     lang = await _lang(query.from_user.id)
     topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
     if topic is None:
@@ -1580,8 +1599,11 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode="Markdown",
         )
         failed = False
+        already_running = False
         try:
-            await _run_digest_with_progress(topic, context.bot, topic.telegram_id, lang)
+            already_running = not await _run_digest_guarded(
+                topic, context.bot, topic.telegram_id, lang
+            )
         except Exception:  # noqa: BLE001
             logger.exception("panel /check failed for topic {}", topic.id)
             failed = True
@@ -1589,6 +1611,10 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await status.delete()
         if failed:
             await context.bot.send_message(chat_id=topic.telegram_id, text=_t(lang, "err_generic"))
+        elif already_running:
+            await context.bot.send_message(
+                chat_id=topic.telegram_id, text=_t(lang, "check_already_running")
+            )
         updated = await store.get_topic(query.from_user.id, topic.id)
         if updated:
             text, keyboard = _topic_card(updated, lang)
@@ -2008,7 +2034,9 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     fetch_msg = _t(ul, "fetch_status", name=topic.shown_name)
     await update.message.reply_text(fetch_msg, parse_mode="Markdown")
     try:
-        await _run_digest_with_progress(topic, context.bot, tg.id, ul)
+        ran = await _run_digest_guarded(topic, context.bot, tg.id, ul)
+        if not ran:
+            await update.message.reply_text(_t(ul, "check_already_running"))
     except Exception:  # noqa: BLE001
         logger.exception("/check failed for topic {}", topic.id)
         await update.message.reply_text(_t(ul, "err_moment"))
@@ -2275,8 +2303,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Inline rename (triggered by ✏️ Rename button on topic card)
     if ud is not None and ud.get("awaiting_rename_id"):
-        from uuid import UUID
-
         topic_id = UUID(ud.pop("awaiting_rename_id"))
         old_name = ud.pop("awaiting_rename_name", "")
         await store.update_topic(topic_id, name=text)
@@ -2287,8 +2313,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Inline describe (triggered by 📝 Research focus button on topic card)
     if ud is not None and ud.get("awaiting_describe_id"):
-        from uuid import UUID
-
         topic_id = UUID(ud.pop("awaiting_describe_id"))
         topic_name = ud.pop("awaiting_describe_name", "")
         await update.message.chat.send_action(ChatAction.TYPING)
@@ -2316,8 +2340,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Inline add source (triggered by ➕ Add source button in sources view) —
     # accepts multiple sources at once, same separators as the /add_topic flow.
     if ud is not None and ud.get("awaiting_source_id"):
-        from uuid import UUID
-
         topic_id = UUID(ud.pop("awaiting_source_id"))
         topic_name = ud.pop("awaiting_source_name", "")
         # Keep any path (e.g. "youtube.com/c/SomeChannel") instead of collapsing
@@ -2350,8 +2372,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # multiple at once; no bare-platform restriction since excluding a whole
     # platform site-wide (e.g. all of youtube.com) is a legitimate use case.
     if ud is not None and ud.get("awaiting_block_id"):
-        from uuid import UUID
-
         topic_id = UUID(ud.pop("awaiting_block_id"))
         topic_name = ud.pop("awaiting_block_name", "")
         domains = [

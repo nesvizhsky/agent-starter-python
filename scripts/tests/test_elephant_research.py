@@ -21,6 +21,7 @@ from elephant.research import (
     _own_domain,
     _parse,
     _source_from_url,
+    _to_english,
     gather,
     generate_source_guidance,
     identify_sides,
@@ -165,6 +166,13 @@ def test_own_domain_extracts_domain_from_url_like_source() -> None:
 def test_own_domain_returns_none_for_plain_outlet_name() -> None:
     assert _own_domain("BBC") is None
     assert _own_domain("TASS") is None
+
+
+async def test_to_english_skips_llm_call_for_ascii_text() -> None:
+    """Already-ASCII text is almost certainly English already — skip the
+    translation call entirely rather than spend an LLM round-trip on it."""
+    text = "Artificial intelligence: new model releases and regulation."
+    assert await _to_english(text) == text
 
 
 def test_is_hub_page_catches_known_shapes() -> None:

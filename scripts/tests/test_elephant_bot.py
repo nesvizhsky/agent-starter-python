@@ -5,7 +5,45 @@ uv run pytest scripts/tests/test_elephant_bot.py
 
 from __future__ import annotations
 
-from elephant.bot import _filter_valid_sources, _is_bare_platform_domain, _split_sources
+import asyncio
+from datetime import UTC, datetime
+from typing import cast
+from uuid import uuid4
+
+from telegram import Bot
+
+from elephant import jobs
+from elephant.bot import (
+    _filter_valid_sources,
+    _is_bare_platform_domain,
+    _run_digest_guarded,
+    _split_sources,
+)
+from elephant.models import Topic
+
+
+def _topic() -> Topic:
+    return Topic(
+        id=uuid4(),
+        telegram_id=1,
+        name="Test",
+        description=None,
+        timezone="UTC",
+        paused=False,
+        sources=[],
+        excluded_sources=[],
+        trusted_sources=[],
+        feedback_notes=None,
+        source_guidance=None,
+        created_at=datetime.now(UTC),
+        last_sent_at=None,
+        slots=[],
+    )
+
+
+class _FakeBot:
+    async def send_message(self, *args: object, **kwargs: object) -> None:
+        pass
 
 
 def test_split_sources_on_commas() -> None:
@@ -58,3 +96,43 @@ def test_filter_valid_sources_separates_bare_platforms() -> None:
     )
     assert valid == ["BBC", "youtube.com/c/SomeChannel"]
     assert rejected == ["youtube.com", "instagram.com"]
+
+
+async def test_run_digest_guarded_rejects_concurrent_check_for_same_topic(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Regression: two overlapping "Check" taps for the same topic used to both
+    run the pipeline, both read store.get_seen_urls() before either had
+    written back, and both send a digest — confirmed in production via a
+    duplicate elephant_seen row for the same URL, 40s apart. The second
+    concurrent call must bail out instead of racing the first."""
+    started = asyncio.Event()
+
+    async def _slow_digest(topic: Topic, bot: object, *, slot: object = None) -> None:
+        started.set()
+        await asyncio.sleep(0.2)
+
+    monkeypatch.setattr(jobs, "_run_digest", _slow_digest)
+
+    topic = _topic()
+    bot = cast(Bot, _FakeBot())
+
+    first = asyncio.ensure_future(_run_digest_guarded(topic, bot, topic.telegram_id, "English"))
+    await started.wait()
+    second = await _run_digest_guarded(topic, bot, topic.telegram_id, "English")
+
+    assert second is False  # bailed out while the first was still running
+    assert await first is True  # the first one actually ran to completion
+
+
+async def test_run_digest_guarded_allows_sequential_checks(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A second check AFTER the first has finished should run normally —
+    the lock must release, not stay held forever."""
+
+    async def _fast_digest(topic: Topic, bot: object, *, slot: object = None) -> None:
+        pass
+
+    monkeypatch.setattr(jobs, "_run_digest", _fast_digest)
+
+    topic = _topic()
+    bot = cast(Bot, _FakeBot())
+    assert await _run_digest_guarded(topic, bot, topic.telegram_id, "English") is True
+    assert await _run_digest_guarded(topic, bot, topic.telegram_id, "English") is True

@@ -191,6 +191,38 @@ async def expand_query(raw: str, topic_name: str) -> str:
         return raw
 
 
+_NON_ASCII_RE = re.compile(r"[^\x00-\x7F]")
+
+_english_translator: Agent[None, str] = Agent(
+    build_model("fast"),
+    output_type=str,
+    system_prompt=(
+        "Translate the given text to English. Return ONLY the translated text — "
+        "no preamble, no quotes, no explanation."
+    ),
+)
+
+
+async def _to_english(text: str) -> str:
+    """Translate *text* to English for use as the general/catch-all search
+    query. Perplexity's search matches on the literal query text, so a
+    non-English query retrieves predominantly same-language results even
+    with English meta-instructions layered on top — confirmed: a Russian
+    archaeology topic's query returned ~9/10 Russian/Ukrainian sources;
+    the same topic translated to English returned genuinely international
+    specialist sources. Skips the LLM call entirely for already-ASCII text
+    (cheap, common case), and falls back to the original text on failure.
+    """
+    if not _NON_ASCII_RE.search(text):
+        return text
+    try:
+        result = await _english_translator.run(text)
+        return result.output.strip()
+    except Exception:  # noqa: BLE001
+        logger.warning("translation to English failed for general query — using original")
+        return text
+
+
 async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
     """Fetch articles for *topic* from all active sources.
 
@@ -242,7 +274,8 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
         )
         for src in side_outlets
     ]
-    coros.append(_query_general(query_subject, lookback, today, source_instr, recency))
+    general_subject = await _to_english(query_subject)
+    coros.append(_query_general(general_subject, lookback, today, source_instr, recency))
 
     raw = await asyncio.gather(*coros, return_exceptions=True)
 
