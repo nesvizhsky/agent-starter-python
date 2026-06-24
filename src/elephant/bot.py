@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 
 from loguru import logger
 from pydantic_ai import Agent
@@ -1030,6 +1031,19 @@ async def _use_profile_tz_and_continue(update: Update, context: ContextTypes.DEF
 # Sources step (add_topic only)
 # ---------------------------------------------------------------------------
 
+_SOURCE_SEPARATORS = re.compile(r"[,;\n]+")
+
+
+def _split_sources(raw: str) -> list[str]:
+    """Split a free-text sources message on comma, semicolon, or newline —
+    not plain whitespace, since some outlets are legitimately referred to by
+    a multi-word name (e.g. "Al Jazeera", "The Guardian"). A user pasting one
+    source per line (no commas) previously produced a single unsplit blob,
+    since Telegram preserves the newlines in message text but a rendered
+    button label silently swallows them, showing all the names jammed
+    together with no visible separator at all."""
+    return [s.strip() for s in _SOURCE_SEPARATORS.split(raw.strip()) if s.strip()]
+
 
 async def _ask_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     tg = update.effective_user
@@ -1044,8 +1058,7 @@ async def _ask_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def _got_sources_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None or not update.message.text:
         return _AT_SOURCES
-    raw = update.message.text.strip()
-    sources = [s.strip() for s in raw.split(",") if s.strip()]
+    sources = _split_sources(update.message.text)
     return await _create_topic(update, context, sources)
 
 

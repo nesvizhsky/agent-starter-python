@@ -722,3 +722,20 @@ blogs, listicle aggregators, encyclopedias) still only applies to
 general/auto-suggested-side-outlet queries, preserving the original intent
 of the bypass. Verified with a synthetic BBC+YouTube citation pair and
 added a regression test.
+
+## 2026-06-24 16:45 — Multi-source input got jammed into one unsplit blob
+
+User pasted several sources at once during /add_topic and the sources view
+later showed one button with everything concatenated:
+"ria.rutass.rurbc.rukommersant.ru...". `_got_sources_text` only split on
+commas (`raw.split(",")`); the user evidently typed one source per line
+(no commas) — Telegram preserves newlines in message text, but a rendered
+InlineKeyboardButton label silently swallows them, so the unsplit blob's
+embedded `\n` characters just vanished visually, jamming everything
+together with no visible separator at all. Explains the exact symptom.
+
+Added `_split_sources()`: splits on comma, semicolon, OR newline — not
+plain whitespace, since some outlets are legitimately multi-word names
+("Al Jazeera", "The Guardian"). Created `scripts/tests/test_elephant_bot.py`
+(bot.py had no offline tests at all before this) with the newline case as
+the primary regression test.
