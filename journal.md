@@ -609,3 +609,40 @@ complaints rather than one vague "onboarding is bad." Fixed all eight:
 Removed dead code along the way: the entire per-topic `_ASK_TZ` conversation
 state, `_ask_tz`/`_got_tz`/`_back_from_tz`, the per-topic `set_tz` action in
 `on_topic_action`, and `on_tz_set` — all replaced by the profile-level path.
+
+## 2026-06-24 15:30 — Testing in the dev bot surfaced the real onboarding bug
+
+Live-testing item #2 from the user-feedback list in the dev bot immediately
+showed the fix was incomplete: /start was localized, but every other message
+in the /add_topic conversation ("What do you want to track?", schedule
+prompts, timezone prompts, sources prompt, the final confirmation...) was
+still hardcoded English, completely bypassing `_t()`/`_lang()`. The user's
+original complaint was specific to /start; testing revealed the entire
+onboarding flow had the same bug.
+
+Localized the whole /add_topic + /schedule conversation: ~33 new `_UI` keys,
+threading `lang` through every handler in the chain (most already had
+`update`/`context` in scope, so this meant fetching `tg.id` and calling
+`_lang()` at the top of each one). Also found and fixed two day-name
+constants (`_DOW_SHORT`, `_DOW_LABELS`) that duplicated existing translated
+`_UI` keys (`dows_0..6`, `dow_0..6`) without ever using them — removed the
+dead duplicates, wired the day-picker keyboards to the real translation.
+
+Separately, the user reported that even the parts that *were* translatable
+broke down differently: typing a Russian topic description got the LLM-
+generated name and expanded description translated back to English. Root
+cause: `_name_agent` (bot.py) and `_expander` (research.py) both had system
+prompts with English-only few-shot examples and no instruction to preserve
+input language — the model defaulted to following the examples' language
+rather than the user's. Added an explicit "respond in the same language the
+user wrote in" instruction to both; verified with a Russian input that both
+the generated name and expanded description now stay in Russian.
+
+Also fixed a real bug surfaced by a live monitor on the dev bot's logs while
+testing: `telegram.error.BadRequest: Message is not modified` was an
+unhandled exception on every one of the 40 `query.edit_message_text()` call
+sites whenever Telegram delivered a duplicate/retried update for an edit
+that would produce byte-identical content (e.g. a double-tap). Added
+`_safe_edit_text()` — catches specifically that error message text (not a
+blanket `except BadRequest`, since that would also hide real bugs like
+unescaped-Markdown parse errors) and bulk-replaced all 40 call sites.

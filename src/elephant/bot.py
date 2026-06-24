@@ -69,6 +69,23 @@ async def _safe_answer(query: CallbackQuery, text: str = "", show_alert: bool = 
         await query.answer(text, show_alert=show_alert)
 
 
+async def _safe_edit_text(query: CallbackQuery, text: str, **kwargs: object) -> None:
+    """Edit a callback query's message, tolerating Telegram's "message is not
+    modified" error — happens on a double-tap or retry where the new content is
+    byte-for-byte identical to what's already shown, which is harmless, not a
+    real failure, and was previously surfacing as an unhandled exception.
+
+    Only that specific error is swallowed — anything else (e.g. a Markdown
+    parse error from unescaped user input) still raises, since those are real
+    bugs we want to see, not silently lose.
+    """
+    try:
+        await query.edit_message_text(text, **kwargs)  # type: ignore[arg-type]
+    except BadRequest as exc:
+        if "message is not modified" not in str(exc).lower():
+            raise
+
+
 # ---------------------------------------------------------------------------
 # Name-generation agent (fast + cheap — just makes a 2-4 word label)
 # ---------------------------------------------------------------------------
@@ -78,8 +95,10 @@ _name_agent: Agent[None, str] = Agent(
     output_type=str,
     system_prompt=(
         "Generate a short topic label (2–4 words, title case) from the user's description. "
+        "Respond in the SAME language the user wrote in — never translate to English. "
         "Return ONLY the label — no quotes, no punctuation, no explanation. "
-        "Examples: 'Russia-Ukraine War', 'AI Regulation', 'Megalithic Archaeology', 'Climate Policy'."  # noqa: E501
+        "Examples (English input only, for style — match the user's own language otherwise): "
+        "'Russia-Ukraine War', 'AI Regulation', 'Megalithic Archaeology', 'Climate Policy'."
     ),
 )
 
@@ -93,15 +112,14 @@ async def _generate_name(description: str) -> str:
 # Schedule constants
 # ---------------------------------------------------------------------------
 
-_DOW_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-_DOW_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-
-_SCHED_TYPE_LABELS: dict[str, str] = {
-    "daily": "Every day",
-    "twice_daily": "Twice daily",
-    "custom_days": "Pick days…",
-    "biweekly": "Every 2 weeks",
-    "manual": "No schedule — check manually",
+# freq -> _UI key, so the "✓ ..." confirmation after picking a schedule type
+# is localized too, not just the button that triggered it.
+_SCHED_TYPE_UI_KEYS: dict[str, str] = {
+    "daily": "sched_daily",
+    "twice_daily": "sched_twice_daily",
+    "custom_days": "sched_custom_days",
+    "biweekly": "sched_biweekly",
+    "manual": "sched_manual_btn",
 }
 
 # ---------------------------------------------------------------------------
@@ -130,6 +148,7 @@ _UI: dict[str, str] = {
     "btn_my_topics": "📋 My topics",
     "btn_check_now": "▶ Check now",
     "no_topics_short": "You have no topics yet.",
+    "no_topic_named": "No topic called *{name}*.",
     # Schedule type labels
     "sched_daily": "Every day",
     "sched_twice_daily": "Twice daily",
@@ -155,6 +174,41 @@ _UI: dict[str, str] = {
     "dows_4": "Fri",
     "dows_5": "Sat",
     "dows_6": "Sun",
+    # /add_topic + /schedule conversation flow
+    "add_topic_prompt": "What do you want to track?\n\nDescribe it in a sentence — I'll suggest a name.",  # noqa: E501
+    "desc_empty": "Please describe what you want to track.",
+    "topic_confirm": "📌 *{name}*\n🔍 _{desc}_\n\nLooks good?",
+    "btn_continue": "Continue →",
+    "btn_rename": "Rename it",
+    "rename_prompt": "Type a short label for this topic:",
+    "rename_empty": "Please type a short label.",
+    "reschedule_picker": "Which topic to reschedule?",
+    "changing_schedule": "Changing schedule…",
+    "sched_another_prompt": "Add another checkup — how often?",
+    "sched_first_prompt": "How often would you like updates?",
+    "sched_manual_btn": "🔕 No schedule — check manually",
+    "nav_back": "← Back",
+    "add_another_prompt": "Add another checkup time?",
+    "sched_days_multi_prompt": "Which days? Tap to select, then tap *Done ✓*.",
+    "sched_days_single_prompt": "Which day? (once every 2 weeks)",
+    "btn_done_check": "Done ✓",
+    "pick_one_day": "Pick at least one day.",
+    "time_second_prompt": "What's the second time?",
+    "time_first_prompt": "What's the first time?",
+    "time_prompt": "What time?",
+    "time_instructions": "{prompt} Type it, e.g. *9:00* or *21:30*\n(your local time, 24-hour or am/pm)",  # noqa: E501
+    "btn_add_another": "+ Add another",
+    "adding_another": "Adding another checkup time…",
+    "done_short": "Done",
+    "schedule_updated": "✓ Schedule updated for *{name}*:\n{label}",
+    "tz_current": "Your current timezone: *{label}*\n\nPick a new one — this updates every topic, not just one:",  # noqa: E501
+    "tz_set_confirm": "✓ Timezone set to {label} for all your topics.",
+    "sources_prompt": "Any specific sources to track? Send a comma-separated list (e.g. *BBC, TASS, Al Jazeera*) or tap Skip.",  # noqa: E501
+    "btn_skip": "Skip",
+    "sources_skipped": "No specific sources — I'll cast a wide net.",
+    "sources_general": "general",
+    "topic_created": "🎉 *Topic created: {name}*\n━━━━━━━━━━━━━━━\n🗓 {label}  ·  {tz}\n📰 Sources: {sources}",  # noqa: E501
+    "timeout_msg": "Timed out waiting for a reply. Send /add\\_topic to start again.",
 }
 
 # Two-level cache: {lang: {key: translated_string}}
@@ -381,18 +435,20 @@ async def cmd_add_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     _reset_topic_flow_state(context)
     if context.user_data is not None:
         context.user_data["sched_mode"] = "create"
-    await update.message.reply_text(
-        "What do you want to track?\n\nDescribe it in a sentence — I'll suggest a name."
-    )
+    tg = update.effective_user
+    lang = await _lang(tg.id) if tg else "English"
+    await update.message.reply_text(_t(lang, "add_topic_prompt"))
     return _AT_DESC
 
 
 async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None or not update.message.text or context.user_data is None:
         return _AT_DESC
+    tg = update.effective_user
+    lang = await _lang(tg.id) if tg else "English"
     desc = update.message.text.strip()
     if not desc:
-        await update.message.reply_text("Please describe what you want to track.")
+        await update.message.reply_text(_t(lang, "desc_empty"))
         return _AT_DESC
     await update.message.chat.send_action(ChatAction.TYPING)
     results = await asyncio.gather(
@@ -417,12 +473,12 @@ async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["new_topic_sides_json"] = json.dumps([s.model_dump() for s in sides])
 
     await update.message.reply_text(
-        f"📌 *{name}*\n🔍 _{expanded}_\n\nLooks good?",
+        _t(lang, "topic_confirm", name=name, desc=expanded),
         reply_markup=InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("Continue →", callback_data="name:ok"),
-                    InlineKeyboardButton("Rename it", callback_data="name:rename"),
+                    InlineKeyboardButton(_t(lang, "btn_continue"), callback_data="name:ok"),
+                    InlineKeyboardButton(_t(lang, "btn_rename"), callback_data="name:rename"),
                 ]
             ]
         ),
@@ -436,24 +492,27 @@ async def _name_confirmed(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if query:
         await _safe_answer(query)
         name = context.user_data.get("new_topic_name", "") if context.user_data else ""
-        await query.edit_message_text(f"✓ *{name}*", parse_mode="Markdown")
+        await _safe_edit_text(query, f"✓ *{name}*", parse_mode="Markdown")
     return await _ask_sched_type(update, context)
 
 
 async def _name_rename_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    if query:
+    if query and query.from_user:
         await _safe_answer(query)
-        await query.edit_message_text("Type a short label for this topic:")
+        lang = await _lang(query.from_user.id)
+        await _safe_edit_text(query, _t(lang, "rename_prompt"))
     return _AT_NAME_CONFIRM
 
 
 async def _got_custom_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None or not update.message.text or context.user_data is None:
         return _AT_NAME_CONFIRM
+    tg = update.effective_user
+    lang = await _lang(tg.id) if tg else "English"
     name = update.message.text.strip()
     if not name:
-        await update.message.reply_text("Please type a short label.")
+        await update.message.reply_text(_t(lang, "rename_empty"))
         return _AT_NAME_CONFIRM
     context.user_data["new_topic_name"] = name
     return await _ask_sched_type(update, context)
@@ -475,24 +534,24 @@ async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if context.user_data is not None:
         context.user_data["sched_mode"] = "update"
 
+    lang = await _lang(tg.id)
     name = " ".join(context.args or []).strip()  # type: ignore[union-attr]
     if not name:
         topics = await store.get_topics(tg.id)
         if not topics:
-            await update.message.reply_text(
-                "You have no topics yet. Use /add\\_topic to create one.",
-                parse_mode="Markdown",
-            )
+            await update.message.reply_text(_t(lang, "no_topics"), parse_mode="Markdown")
             return ConversationHandler.END
         buttons = [[InlineKeyboardButton(t.name, callback_data=f"sc_pick:{t.id}")] for t in topics]
         await update.message.reply_text(
-            "Which topic to reschedule?", reply_markup=InlineKeyboardMarkup(buttons)
+            _t(lang, "reschedule_picker"), reply_markup=InlineKeyboardMarkup(buttons)
         )
         return _SC_PICK
 
     topic = await store.get_topic_by_name(tg.id, name)
     if topic is None:
-        await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
+        await update.message.reply_text(
+            _t(lang, "no_topic_named", name=name), parse_mode="Markdown"
+        )
         return ConversationHandler.END
 
     if context.user_data is not None:
@@ -503,12 +562,13 @@ async def cmd_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def _sc_got_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Topic selected from the /schedule picker."""
     query = update.callback_query
-    if query is None or query.data is None or context.user_data is None:
+    if query is None or query.data is None or query.from_user is None or context.user_data is None:
         return _SC_PICK
     await _safe_answer(query)
     topic_id_str = query.data.split(":", 1)[1]
     context.user_data["sched_topic_id"] = topic_id_str
-    await query.edit_message_text("Changing schedule…")
+    lang = await _lang(query.from_user.id)
+    await _safe_edit_text(query, _t(lang, "changing_schedule"))
     return await _ask_sched_type(update, context)
 
 
@@ -517,7 +577,7 @@ async def _tp_schedule_entry(update: Update, context: ContextTypes.DEFAULT_TYPE)
     schedule-editing flow for that topic instead of telling the user to type
     /schedule <name> themselves."""
     query = update.callback_query
-    if query is None or query.data is None:
+    if query is None or query.data is None or query.from_user is None:
         return ConversationHandler.END
     await _safe_answer(query)
     topic_id_str = query.data.split(":", 2)[2]
@@ -526,7 +586,8 @@ async def _tp_schedule_entry(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data["sched_mode"] = "update"
         context.user_data["sched_topic_id"] = topic_id_str
     if isinstance(query.message, Message):
-        await query.message.reply_text("Changing schedule…")
+        lang = await _lang(query.from_user.id)
+        await query.message.reply_text(_t(lang, "changing_schedule"))
     return await _ask_sched_type(update, context)
 
 
@@ -540,21 +601,23 @@ def _back_button() -> InlineKeyboardButton:
 
 
 async def _ask_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    tg = update.effective_user
+    lang = await _lang(tg.id) if tg else "English"
     n_slots = len(context.user_data.get("new_topic_slots", [])) if context.user_data else 0
-    prompt = "Add another checkup — how often?" if n_slots else "How often would you like updates?"
+    prompt = _t(lang, "sched_another_prompt" if n_slots else "sched_first_prompt")
     rows = [
         [
-            InlineKeyboardButton("Every day", callback_data="sched:daily"),
-            InlineKeyboardButton("Twice daily", callback_data="sched:twice_daily"),
+            InlineKeyboardButton(_t(lang, "sched_daily"), callback_data="sched:daily"),
+            InlineKeyboardButton(_t(lang, "sched_twice_daily"), callback_data="sched:twice_daily"),
         ],
-        [InlineKeyboardButton("Pick days…", callback_data="sched:custom_days")],
-        [InlineKeyboardButton("Every 2 weeks", callback_data="sched:biweekly")],
+        [InlineKeyboardButton(_t(lang, "sched_custom_days"), callback_data="sched:custom_days")],
+        [InlineKeyboardButton(_t(lang, "sched_biweekly"), callback_data="sched:biweekly")],
     ]
     # Only offered for the first checkup slot — once a topic already has a scheduled
     # slot, "no schedule" doesn't make sense as an *additional* one.
     if not n_slots:
         rows.append(
-            [InlineKeyboardButton("🔕 No schedule — check manually", callback_data="sched:manual")]
+            [InlineKeyboardButton(_t(lang, "sched_manual_btn"), callback_data="sched:manual")]
         )
     rows.append([_back_button()])
     await _reply(update, prompt, reply_markup=InlineKeyboardMarkup(rows))
@@ -566,31 +629,35 @@ async def _back_from_sched_type(update: Update, context: ContextTypes.DEFAULT_TY
     the add-another prompt if a slot already exists, the name confirmation if
     this is the very first slot of a new topic, or just cancel a /schedule edit."""
     query = update.callback_query
-    if query is None or context.user_data is None:
+    if query is None or query.from_user is None or context.user_data is None:
         return _ASK_SCHED_TYPE
     await _safe_answer(query)
     ud = context.user_data
+    lang = await _lang(query.from_user.id)
 
     slots: list[Slot] = ud.get("new_topic_slots", [])
     if slots:
-        await query.edit_message_text("← Back")
-        await _reply(update, "Add another checkup time?", reply_markup=_add_another_keyboard())
+        await _safe_edit_text(query, _t(lang, "nav_back"))
+        await _reply(
+            update, _t(lang, "add_another_prompt"), reply_markup=_add_another_keyboard(lang)
+        )
         return _ASK_ADD_ANOTHER
 
     if ud.get("sched_mode") == "update":
-        await query.edit_message_text(_t(await _lang(query.from_user.id), "cancelled"))
+        await _safe_edit_text(query, _t(lang, "cancelled"))
         _reset_topic_flow_state(context)
         return ConversationHandler.END
 
     name = ud.get("new_topic_name", "")
     desc = ud.get("new_topic_desc", "")
-    await query.edit_message_text(
-        f"📌 *{name}*\n🔍 _{desc}_\n\nLooks good?",
+    await _safe_edit_text(
+        query,
+        _t(lang, "topic_confirm", name=name, desc=desc),
         reply_markup=InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("Continue →", callback_data="name:ok"),
-                    InlineKeyboardButton("Rename it", callback_data="name:rename"),
+                    InlineKeyboardButton(_t(lang, "btn_continue"), callback_data="name:ok"),
+                    InlineKeyboardButton(_t(lang, "btn_rename"), callback_data="name:rename"),
                 ]
             ]
         ),
@@ -601,12 +668,14 @@ async def _back_from_sched_type(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def _got_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    if query is None or query.data is None or context.user_data is None:
+    if query is None or query.data is None or query.from_user is None or context.user_data is None:
         return _ASK_SCHED_TYPE
     await _safe_answer(query)
     freq = query.data.split(":", 1)[1]
     context.user_data["new_topic_freq"] = freq
-    await query.edit_message_text(f"✓ {_SCHED_TYPE_LABELS.get(freq, freq)}")
+    lang = await _lang(query.from_user.id)
+    ui_key = _SCHED_TYPE_UI_KEYS.get(freq)
+    await _safe_edit_text(query, f"✓ {_t(lang, ui_key) if ui_key else freq}")
 
     if freq == "manual":
         # No slot to add — jump straight to wherever the "Done" path of the
@@ -625,40 +694,44 @@ async def _got_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return await _ask_time(update, context)
 
 
-def _day_toggle_keyboard(selected: set[int]) -> InlineKeyboardMarkup:
+def _day_toggle_keyboard(selected: set[int], lang: str = "English") -> InlineKeyboardMarkup:
     def lbl(i: int) -> str:
-        return f"✓ {_DOW_SHORT[i]}" if i in selected else _DOW_SHORT[i]
+        short = _t(lang, f"dows_{i}")
+        return f"✓ {short}" if i in selected else short
 
     row1 = [InlineKeyboardButton(lbl(i), callback_data=f"day_toggle:{i}") for i in range(4)]
     row2 = [InlineKeyboardButton(lbl(i), callback_data=f"day_toggle:{i}") for i in range(4, 7)]
-    done_row = [InlineKeyboardButton("Done ✓", callback_data="day_done"), _back_button()]
+    done_btn = InlineKeyboardButton(_t(lang, "btn_done_check"), callback_data="day_done")
+    done_row = [done_btn, _back_button()]
     return InlineKeyboardMarkup([row1, row2, done_row])
 
 
-def _day_single_keyboard() -> InlineKeyboardMarkup:
+def _day_single_keyboard(lang: str = "English") -> InlineKeyboardMarkup:
     def _btn(i: int) -> InlineKeyboardButton:
-        return InlineKeyboardButton(_DOW_SHORT[i], callback_data=f"dow_single:{i}")
+        return InlineKeyboardButton(_t(lang, f"dows_{i}"), callback_data=f"dow_single:{i}")
 
     row2 = [_btn(i) for i in range(4, 7)] + [_back_button()]
     return InlineKeyboardMarkup([[_btn(i) for i in range(4)], row2])
 
 
 async def _ask_sched_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    tg = update.effective_user
+    lang = await _lang(tg.id) if tg else "English"
     ud = context.user_data
     mode = ud.get("sched_days_mode", "single") if ud else "single"
     if mode == "multi":
         selected: set[int] = ud.get("selected_days", set()) if ud else set()
         await _reply(
             update,
-            "Which days? Tap to select, then tap *Done ✓*.",
-            reply_markup=_day_toggle_keyboard(selected),
+            _t(lang, "sched_days_multi_prompt"),
+            reply_markup=_day_toggle_keyboard(selected, lang),
             parse_mode="Markdown",
         )
     else:
         await _reply(
             update,
-            "Which day? (once every 2 weeks)",
-            reply_markup=_day_single_keyboard(),
+            _t(lang, "sched_days_single_prompt"),
+            reply_markup=_day_single_keyboard(lang),
         )
     return _ASK_SCHED_DAYS
 
@@ -667,20 +740,21 @@ async def _back_from_sched_days(update: Update, context: ContextTypes.DEFAULT_TY
     """← from the day-picker: discard the in-progress day selection and return
     to the "how often" screen."""
     query = update.callback_query
-    if query is None or context.user_data is None:
+    if query is None or query.from_user is None or context.user_data is None:
         return _ASK_SCHED_DAYS
     await _safe_answer(query)
     context.user_data.pop("selected_days", None)
     context.user_data.pop("sched_days_mode", None)
     context.user_data.pop("new_topic_freq", None)
-    await query.edit_message_text("← Back")
+    lang = await _lang(query.from_user.id)
+    await _safe_edit_text(query, _t(lang, "nav_back"))
     return await _ask_sched_type(update, context)
 
 
 async def _toggle_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Tap a day to toggle it in the multi-select picker."""
     query = update.callback_query
-    if query is None or query.data is None or context.user_data is None:
+    if query is None or query.data is None or query.from_user is None or context.user_data is None:
         return _ASK_SCHED_DAYS
     await _safe_answer(query)
     day_idx = int(query.data.split(":", 1)[1])
@@ -690,36 +764,39 @@ async def _toggle_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     else:
         selected.add(day_idx)
     context.user_data["selected_days"] = selected
-    await query.edit_message_reply_markup(reply_markup=_day_toggle_keyboard(selected))
+    lang = await _lang(query.from_user.id)
+    await query.edit_message_reply_markup(reply_markup=_day_toggle_keyboard(selected, lang))
     return _ASK_SCHED_DAYS
 
 
 async def _done_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Done button in multi-select day picker."""
     query = update.callback_query
-    if query is None or context.user_data is None:
+    if query is None or query.from_user is None or context.user_data is None:
         return _ASK_SCHED_DAYS
+    lang = await _lang(query.from_user.id)
     selected: set[int] = context.user_data.get("selected_days", set())
     if not selected:
-        await _safe_answer(query, "Pick at least one day.", show_alert=True)
+        await _safe_answer(query, _t(lang, "pick_one_day"), show_alert=True)
         return _ASK_SCHED_DAYS
     await _safe_answer(query)
     days_str = ",".join(str(d) for d in sorted(selected))
     context.user_data["new_topic_schedule_days"] = days_str
-    day_names = " / ".join(_DOW_SHORT[d] for d in sorted(selected))
-    await query.edit_message_text(f"✓ {day_names}")
+    day_names = " / ".join(_t(lang, f"dows_{d}") for d in sorted(selected))
+    await _safe_edit_text(query, f"✓ {day_names}")
     return await _ask_time(update, context)
 
 
 async def _got_single_day(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Day selected in single-select (weekly/biweekly)."""
     query = update.callback_query
-    if query is None or query.data is None or context.user_data is None:
+    if query is None or query.data is None or query.from_user is None or context.user_data is None:
         return _ASK_SCHED_DAYS
     await _safe_answer(query)
     dow = int(query.data.split(":", 1)[1])
     context.user_data["new_topic_dow"] = dow
-    await query.edit_message_text(f"✓ {_DOW_LABELS[dow]}")
+    lang = await _lang(query.from_user.id)
+    await _safe_edit_text(query, f"✓ {_t(lang, f'dow_{dow}')}")
     return await _ask_time(update, context)
 
 
@@ -745,16 +822,18 @@ def _parse_time(text: str) -> tuple[int, int]:
 
 
 async def _ask_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    tg = update.effective_user
+    lang = await _lang(tg.id) if tg else "English"
     ud = context.user_data
     if ud and ud.get("_twice_daily_second"):
-        prompt = "What's the second time?"
+        prompt_key = "time_second_prompt"
     elif ud and ud.get("_twice_daily_pending"):
-        prompt = "What's the first time?"
+        prompt_key = "time_first_prompt"
     else:
-        prompt = "What time?"
+        prompt_key = "time_prompt"
     await _reply(
         update,
-        f"{prompt} Type it, e.g. *9:00* or *21:30*\n(your local time, 24-hour or am/pm)",
+        _t(lang, "time_instructions", prompt=_t(lang, prompt_key)),
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[_back_button()]]),
     )
@@ -766,11 +845,12 @@ async def _back_from_time(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     slot was reached from — the day-picker, the "how often" screen, or (for
     twice daily's second time) re-ask the first time."""
     query = update.callback_query
-    if query is None or context.user_data is None:
+    if query is None or query.from_user is None or context.user_data is None:
         return _ASK_TIME
     await _safe_answer(query)
     ud = context.user_data
-    await query.edit_message_text("← Back")
+    lang = await _lang(query.from_user.id)
+    await _safe_edit_text(query, _t(lang, "nav_back"))
 
     if ud.pop("_twice_daily_second", False):
         ud["new_topic_freq"] = "twice_daily"
@@ -805,12 +885,12 @@ def _finish_slot(ud: dict[str, object], hour: int, minute: int) -> Slot:
     return Slot(days=days, hour=hour, minute=minute, every_n_weeks=every_n_weeks)
 
 
-def _add_another_keyboard() -> InlineKeyboardMarkup:
+def _add_another_keyboard(lang: str = "English") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("+ Add another", callback_data="slot:add"),
-                InlineKeyboardButton("Done ✓", callback_data="slot:done"),
+                InlineKeyboardButton(_t(lang, "btn_add_another"), callback_data="slot:add"),
+                InlineKeyboardButton(_t(lang, "btn_done_check"), callback_data="slot:done"),
             ],
             [InlineKeyboardButton("←", callback_data="slot:back")],
         ]
@@ -820,6 +900,8 @@ def _add_another_keyboard() -> InlineKeyboardMarkup:
 async def _got_time_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None or not update.message.text or context.user_data is None:
         return _ASK_TIME
+    tg = update.effective_user
+    lang = await _lang(tg.id) if tg else "English"
     h, m = _parse_time(update.message.text)
     slot = _finish_slot(context.user_data, h, m)
     context.user_data.setdefault("new_topic_slots", []).append(slot)
@@ -831,29 +913,30 @@ async def _got_time_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return await _ask_time(update, context)
     context.user_data.pop("_twice_daily_second", None)
 
-    await _reply(update, "Add another checkup time?", reply_markup=_add_another_keyboard())
+    await _reply(update, _t(lang, "add_another_prompt"), reply_markup=_add_another_keyboard(lang))
     return _ASK_ADD_ANOTHER
 
 
 async def _got_add_another(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    if query is None or query.data is None or context.user_data is None:
+    if query is None or query.data is None or query.from_user is None or context.user_data is None:
         return _ASK_ADD_ANOTHER
     await _safe_answer(query)
     action = query.data.split(":", 1)[1]
+    lang = await _lang(query.from_user.id)
 
     if action == "back":
         slots: list[Slot] = context.user_data.get("new_topic_slots", [])
         if slots:
             slots.pop()
-        await query.edit_message_text("← Back")
+        await _safe_edit_text(query, _t(lang, "nav_back"))
         return await _ask_sched_type(update, context)
 
     if action == "add":
-        await query.edit_message_text("Adding another checkup time…")
+        await _safe_edit_text(query, _t(lang, "adding_another"))
         return await _ask_sched_type(update, context)
 
-    await query.edit_message_text("✓ Done")
+    await _safe_edit_text(query, f"✓ {_t(lang, 'done_short')}")
     if context.user_data.get("sched_mode") == "update":
         return await _update_schedule(update, context)
     return await _use_profile_tz_and_continue(update, context)
@@ -870,19 +953,19 @@ async def _update_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     tg = update.effective_user
     if tg is None:
         return ConversationHandler.END
+    lang = await _lang(tg.id)
     topic = await store.get_topic(tg.id, topic_id)
     if topic is None:
         if update.message:
-            ul_s = await _lang(tg.id)
-            await update.message.reply_text(_t(ul_s, "topic_nf"))
+            await update.message.reply_text(_t(lang, "topic_nf"))
         return ConversationHandler.END
 
     slots: list[Slot] = ud.pop("new_topic_slots", [])
     ud.pop("sched_mode", None)
 
     await store.replace_slots(topic_id, slots)
-    label = _sched_label_for_slots(slots, topic.timezone)
-    msg = f"✓ Schedule updated for *{_short(topic.name)}*:\n{label}"
+    label = _sched_label_for_slots(slots, topic.timezone, lang)
+    msg = _t(lang, "schedule_updated", name=_short(topic.name), label=label)
     if update.message:
         await update.message.reply_text(msg, parse_mode="Markdown")
     elif update.callback_query:
@@ -929,12 +1012,12 @@ async def _use_profile_tz_and_continue(update: Update, context: ContextTypes.DEF
 
 
 async def _ask_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    msg = (
-        "Any specific sources to track? Send a comma-separated list "
-        "(e.g. *BBC, TASS, Al Jazeera*) or tap Skip."
+    tg = update.effective_user
+    lang = await _lang(tg.id) if tg else "English"
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton(_t(lang, "btn_skip"), callback_data="sources:skip")]]
     )
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Skip", callback_data="sources:skip")]])
-    await _reply(update, msg, reply_markup=keyboard, parse_mode="Markdown")
+    await _reply(update, _t(lang, "sources_prompt"), reply_markup=keyboard, parse_mode="Markdown")
     return _AT_SOURCES
 
 
@@ -948,9 +1031,10 @@ async def _got_sources_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def _got_sources_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    if query:
+    if query and query.from_user:
         await _safe_answer(query)
-        await query.edit_message_text("No specific sources — I'll cast a wide net.")
+        lang = await _lang(query.from_user.id)
+        await _safe_edit_text(query, _t(lang, "sources_skipped"))
     return await _create_topic(update, context, [])
 
 
@@ -960,6 +1044,7 @@ async def _create_topic(
     tg = update.effective_user
     if tg is None or context.user_data is None:
         return ConversationHandler.END
+    lang = await _lang(tg.id)
     ud = context.user_data
     name = ud.pop("new_topic_name", "")
     desc = ud.pop("new_topic_desc", None)
@@ -979,20 +1064,18 @@ async def _create_topic(
         source_guidance=source_guidance,
         sides_json=sides_json,
     )
-    label = _sched_label_for_slots(slots, tz)
+    label = _sched_label_for_slots(slots, tz, lang)
     tz_label = next((lbl for lbl, z in _TIMEZONES if z == tz), tz)
     # Distinct from the many small "✓ ..." step confirmations earlier in this same
     # flow (✓ name, ✓ schedule, ✓ timezone, ...) — a user reported missing that
     # their topic was actually saved because the final message looked the same as
     # those intermediate ones. A heading + box makes "topic now exists" unambiguous.
-    msg = (
-        f"🎉 *Topic created: {topic.name}*\n"
-        "━━━━━━━━━━━━━━━\n"
-        f"🗓 {label}  ·  {tz_label}\n"
-        f"📰 Sources: {', '.join(sources) if sources else 'general'}"
+    sources_label = ", ".join(sources) if sources else _t(lang, "sources_general")
+    msg = _t(
+        lang, "topic_created", name=topic.name, label=label, tz=tz_label, sources=sources_label
     )
     keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("▶️ Check now", callback_data=f"ta:check:{topic.id}")]]
+        [[InlineKeyboardButton(_t(lang, "btn_check_now"), callback_data=f"ta:check:{topic.id}")]]
     )
     if update.message:
         await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="Markdown")
@@ -1033,10 +1116,10 @@ async def _conversation_timeout(update: Update, context: ContextTypes.DEFAULT_TY
     """Fires when a user abandons add_topic/schedule mid-flow without finishing or /cancel."""
     _reset_topic_flow_state(context)
     chat = update.effective_chat
+    tg = update.effective_user
     if chat is not None:
-        await context.bot.send_message(
-            chat.id, "Timed out waiting for a reply. Send /add\\_topic to start again."
-        )
+        lang = await _lang(tg.id) if tg else "English"
+        await context.bot.send_message(chat.id, _t(lang, "timeout_msg"))
     return ConversationHandler.END
 
 
@@ -1140,12 +1223,12 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ul = await _lang(query.from_user.id)
     topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
     if topic is None:
-        await query.edit_message_text(_t(ul, "topic_nf"))
+        await _safe_edit_text(query, _t(ul, "topic_nf"))
         return
 
     if action == "check":
-        await query.edit_message_text(
-            _t(ul, "fetch_status", name=topic.shown_name), parse_mode="Markdown"
+        await _safe_edit_text(
+            query, _t(ul, "fetch_status", name=topic.shown_name), parse_mode="Markdown"
         )
         try:
             await jobs._run_digest(topic, context.bot)
@@ -1155,25 +1238,27 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         updated = await store.get_topic(query.from_user.id, topic.id)
         if updated:
             text, keyboard = _topic_card(updated, ul)
-            await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+            await _safe_edit_text(query, text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action == "pause":
         await store.update_topic(topic.id, paused=True)
-        await query.edit_message_text(f"⏸ *{topic.shown_name}* paused.", parse_mode="Markdown")
+        await _safe_edit_text(query, f"⏸ *{topic.shown_name}* paused.", parse_mode="Markdown")
 
     elif action == "resume":
         await store.update_topic(topic.id, paused=False)
-        await query.edit_message_text(f"▶ *{topic.shown_name}* resumed.", parse_mode="Markdown")
+        await _safe_edit_text(query, f"▶ *{topic.shown_name}* resumed.", parse_mode="Markdown")
 
     elif action == "reset":
         n = await store.clear_seen(topic.id)
-        await query.edit_message_text(
+        await _safe_edit_text(
+            query,
             _t(ul, "cleared_n", n=n, name=_short(topic.shown_name)),
             parse_mode="Markdown",
         )
 
     elif action == "delete":
-        await query.edit_message_text(
+        await _safe_edit_text(
+            query,
             f"Delete *{_short(topic.name)}*?\n\nThis removes the topic and all its history.",
             reply_markup=InlineKeyboardMarkup(
                 [
@@ -1203,16 +1288,16 @@ async def on_topic_delete_confirm(update: Update, _ctx: ContextTypes.DEFAULT_TYP
 
     ul_del = await _lang(query.from_user.id)
     if action == "cancel":
-        await query.edit_message_text(_t(ul_del, "cancelled"))
+        await _safe_edit_text(query, _t(ul_del, "cancelled"))
         return
 
     topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
     if topic is None:
-        await query.edit_message_text(_t(ul_del, "topic_nf"))
+        await _safe_edit_text(query, _t(ul_del, "topic_nf"))
         return
 
     await store.delete_topic(topic.id)
-    await query.edit_message_text(f"✓ *{_short(topic.name)}* deleted.", parse_mode="Markdown")
+    await _safe_edit_text(query, f"✓ *{_short(topic.name)}* deleted.", parse_mode="Markdown")
 
 
 async def on_profile_tz_set(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1225,8 +1310,9 @@ async def on_profile_tz_set(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> 
     zone = query.data.split(":", 1)[1]
 
     await store.set_user_timezone(query.from_user.id, zone)
+    lang = await _lang(query.from_user.id)
     label = next((lbl for lbl, z in _TIMEZONES if z == zone), zone)
-    await query.edit_message_text(f"✓ Timezone set to {label} for all your topics.")
+    await _safe_edit_text(query, _t(lang, "tz_set_confirm", label=label))
 
 
 async def _show_sources_view(query: object, topic: Topic) -> None:
@@ -1261,7 +1347,7 @@ async def _show_sources_view(query: object, topic: Topic) -> None:
         ]
     )
     rows.append([InlineKeyboardButton("← Back", callback_data=f"tp:back:{tid}")])
-    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+    await _safe_edit_text(q, msg, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 
 # ---------------------------------------------------------------------------
@@ -1288,7 +1374,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     lang = await _lang(query.from_user.id)
     topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
     if topic is None:
-        await query.edit_message_text(_t(lang, "topic_nf"))
+        await _safe_edit_text(query, _t(lang, "topic_nf"))
         return
 
     if action == "check":
@@ -1300,8 +1386,8 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         running_text = (
             f"📌 *{topic.shown_name}*\n{_t(lang, 'fetch_card')}\n_{query_text}  ·  {last}_"
         )
-        await query.edit_message_text(
-            running_text, reply_markup=card_keyboard, parse_mode="Markdown"
+        await _safe_edit_text(
+            query, running_text, reply_markup=card_keyboard, parse_mode="Markdown"
         )
         # Also send a separate status message below the card
         status = await context.bot.send_message(
@@ -1322,7 +1408,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         updated = await store.get_topic(query.from_user.id, topic.id)
         if updated:
             text, keyboard = _topic_card(updated, lang)
-            await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+            await _safe_edit_text(query, text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action in ("pause", "resume"):
         paused = action == "pause"
@@ -1330,12 +1416,13 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         updated = await store.get_topic(query.from_user.id, topic.id)
         if updated:
             text, keyboard = _topic_card(updated, lang)
-            await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+            await _safe_edit_text(query, text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action == "reset":
         n = await store.clear_seen(topic.id)
         text, keyboard = _topic_card(topic, lang)
-        await query.edit_message_text(
+        await _safe_edit_text(
+            query,
             text + f"\n\n{_t(lang, 'cleared_n', n=n, name=_short(topic.shown_name))}",
             reply_markup=keyboard,
             parse_mode="Markdown",
@@ -1407,18 +1494,19 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     elif action == "edit":
         text, keyboard = _topic_card_expanded(topic, lang)
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+        await _safe_edit_text(query, text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action == "close":
         text, keyboard = _topic_card(topic, lang)
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+        await _safe_edit_text(query, text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action == "back":
         text, keyboard = _topic_card_expanded(topic, lang)
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+        await _safe_edit_text(query, text, reply_markup=keyboard, parse_mode="Markdown")
 
     elif action == "delete":
-        await query.edit_message_text(
+        await _safe_edit_text(
+            query,
             f"Delete *{_short(topic.name)}*?\n\nThis removes the topic and all its history.",
             reply_markup=InlineKeyboardMarkup(
                 [
@@ -1436,11 +1524,11 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif action == "del_confirm":
         name = topic.name
         await store.delete_topic(topic.id)
-        await query.edit_message_text(f"✓ *{_short(name)}* deleted.", parse_mode="Markdown")
+        await _safe_edit_text(query, f"✓ *{_short(name)}* deleted.", parse_mode="Markdown")
 
     elif action == "del_cancel":
         text, keyboard = _topic_card_expanded(topic)
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+        await _safe_edit_text(query, text, reply_markup=keyboard, parse_mode="Markdown")
 
 
 # ---------------------------------------------------------------------------
@@ -1528,11 +1616,11 @@ async def cmd_timezone(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     tg = update.effective_user
     if tg is None:
         return
+    lang = await _lang(tg.id)
     current = await store.get_user_timezone(tg.id)
     current_label = next((lbl for lbl, z in _TIMEZONES if z == current), current)
     await update.message.reply_text(
-        f"Your current timezone: *{current_label}*\n\n"
-        "Pick a new one — this updates every topic, not just one:",
+        _t(lang, "tz_current", label=current_label),
         reply_markup=_timezone_keyboard("tzprofile:"),
         parse_mode="Markdown",
     )
@@ -1701,12 +1789,12 @@ async def _cb_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         prompt = other_prompts.get(
             current, "Type the language you want (e.g. *Italian*, *Japanese*, *Ukrainian*):"
         )
-        await query.edit_message_text(prompt, parse_mode="Markdown")
+        await _safe_edit_text(query, prompt, parse_mode="Markdown")
         return
     await store.set_user_language(tg.id, lang)
     _lang_cache[tg.id] = lang
     confirm = _LANGUAGE_CONFIRMED.get(lang, f"✓ Digests will now be written in {lang}.")
-    await query.edit_message_text(confirm)
+    await _safe_edit_text(query, confirm)
     await _translate_topics(tg.id, lang)
 
 
