@@ -674,3 +674,30 @@ Ignoring conversation_timeout" on every startup — the `[job-queue]` extra
 was never installed, so abandoned /add_topic conversations were never
 cleaned up after the configured 10-minute timeout. Added
 `python-telegram-bot[job-queue]` to pyproject.toml.
+
+## 2026-06-24 16:20 — Global error handler + "still running" reassurance
+
+User reported a batch of 6 issues from real production use, including: ran
+3 /check requests back to back, the last 2 delivered results, the first
+"never did". Checked production logs directly (`railway logs`) rather than
+guessing — the first one actually DID send, just ~7 minutes after starting
+(vs ~20-40s for the other two, which had little/no new content). Not a
+hang or a bug — that topic genuinely has far more sources/articles to run
+through perspective-clustering + propaganda-analysis. The real problem is
+UX: nothing told the user it was still working, so 7 minutes of silence
+reads identically to "broken".
+
+Production logs also confirmed both bugs already fixed in dev
+(`_safe_edit_text`, the rm_src/rm_blk UUID parse) are still live in
+production and firing right now — motivates deploying soon.
+
+Two fixes:
+1. `app.add_error_handler()` — PTB had none registered at all (every prior
+   "No error handlers are registered, logging exception" log line was this
+   gap). Without it, any exception that escapes a handler's own try/except
+   vanishes with the user seeing nothing. Now logs the real traceback via
+   loguru AND tells the user something went wrong, in their language.
+2. `_run_digest_with_progress()` — wraps the existing `jobs._run_digest()`
+   call; if it's still running after 60s, sends a "still working, hang
+   tight" message before continuing to await it. Wired into all 3 call
+   sites (cmd_check, the topic-picker check, the topic-panel check).

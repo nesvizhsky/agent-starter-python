@@ -16,6 +16,7 @@ import json
 from loguru import logger
 from pydantic_ai import Agent
 from telegram import (
+    Bot,
     BotCommand,
     CallbackQuery,
     InlineKeyboardButton,
@@ -84,6 +85,24 @@ async def _safe_edit_text(query: CallbackQuery, text: str, **kwargs: object) -> 
     except BadRequest as exc:
         if "message is not modified" not in str(exc).lower():
             raise
+
+
+_PROGRESS_REMINDER_AFTER = 60.0  # seconds
+
+
+async def _run_digest_with_progress(topic: Topic, bot: Bot, chat_id: int, lang: str) -> None:
+    """Run the digest pipeline, sending a reassurance message if it's still
+    going after _PROGRESS_REMINDER_AFTER seconds. A real digest legitimately
+    takes anywhere from ~20s (few/no new articles) to several minutes (a
+    topic with many real sources, each clustered + propaganda-analyzed) —
+    confirmed via production logs, not a hang. Without this, a user watching
+    a 5+ minute topic has no way to tell that apart from "broken"."""
+    digest_task = asyncio.ensure_future(jobs._run_digest(topic, bot))
+    done, _pending = await asyncio.wait({digest_task}, timeout=_PROGRESS_REMINDER_AFTER)
+    if digest_task not in done:
+        with contextlib.suppress(Exception):
+            await bot.send_message(chat_id, _t(lang, "still_running"))
+    await digest_task  # propagates any exception to the caller's own try/except
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +228,7 @@ _UI: dict[str, str] = {
     "sources_general": "general",
     "topic_created": "🎉 *Topic created: {name}*\n━━━━━━━━━━━━━━━\n🗓 {label}  ·  {tz}\n📰 Sources: {sources}",  # noqa: E501
     "timeout_msg": "Timed out waiting for a reply. Send /add\\_topic to start again.",
+    "still_running": "⏳ Still working — topics with a lot of sources can take a few minutes. Hang tight!",  # noqa: E501
 }
 
 # Two-level cache: {lang: {key: translated_string}}
@@ -1231,7 +1251,7 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             query, _t(ul, "fetch_status", name=topic.shown_name), parse_mode="Markdown"
         )
         try:
-            await jobs._run_digest(topic, context.bot)
+            await _run_digest_with_progress(topic, context.bot, topic.telegram_id, ul)
         except Exception:  # noqa: BLE001
             logger.exception("picker /check failed for topic {}", topic.id)
             await query.message.reply_text(_t(ul, "err_moment"))  # type: ignore[union-attr]
@@ -1402,7 +1422,7 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         failed = False
         try:
-            await jobs._run_digest(topic, context.bot)
+            await _run_digest_with_progress(topic, context.bot, topic.telegram_id, lang)
         except Exception:  # noqa: BLE001
             logger.exception("panel /check failed for topic {}", topic.id)
             failed = True
@@ -1821,13 +1841,13 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     topic = await store.get_topic_by_name(tg.id, name)
     if topic is None:
-        await update.message.reply_text(f"No topic called *{name}*.", parse_mode="Markdown")
+        await update.message.reply_text(_t(ul, "no_topic_named", name=name), parse_mode="Markdown")
         return
     await update.message.chat.send_action(ChatAction.TYPING)
     fetch_msg = _t(ul, "fetch_status", name=topic.shown_name)
     await update.message.reply_text(fetch_msg, parse_mode="Markdown")
     try:
-        await jobs._run_digest(topic, context.bot)
+        await _run_digest_with_progress(topic, context.bot, tg.id, ul)
     except Exception:  # noqa: BLE001
         logger.exception("/check failed for topic {}", topic.id)
         await update.message.reply_text(_t(ul, "err_moment"))
@@ -2196,6 +2216,23 @@ async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
     await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
 
+async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Global fallback for any exception that escapes a handler unhandled.
+
+    Without this, PTB has nowhere to send it — it just logs to its own
+    (unconfigured) logger and the user sees nothing at all, a silent failure
+    indistinguishable from "still working". This both logs the real traceback
+    and tells the affected user something actually went wrong.
+    """
+    logger.opt(exception=context.error).error("Unhandled exception while processing update")
+    if not isinstance(update, Update) or update.effective_chat is None:
+        return
+    tg = update.effective_user
+    lang = await _lang(tg.id) if tg else "English"
+    with contextlib.suppress(Exception):
+        await context.bot.send_message(update.effective_chat.id, _t(lang, "err_generic"))
+
+
 def build_application() -> Application:  # type: ignore[type-arg]
     """Build the PTB Application with all handlers. Used by both polling and webhook."""
     token = get_settings().telegram_bot_token
@@ -2280,6 +2317,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CallbackQueryHandler(on_profile_tz_set, pattern=r"^tzprofile:"))
     app.add_handler(CallbackQueryHandler(_cb_language, pattern=r"^lang:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_error_handler(_on_error)
 
     return app
 
