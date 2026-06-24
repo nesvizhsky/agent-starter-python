@@ -2252,7 +2252,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    # Inline add source (triggered by ➕ Add source button in sources view)
+    # Inline add source (triggered by ➕ Add source button in sources view) —
+    # accepts multiple sources at once, same separators as the /add_topic flow.
     if ud is not None and ud.get("awaiting_source_id"):
         from uuid import UUID
 
@@ -2261,36 +2262,53 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # Keep any path (e.g. "youtube.com/c/SomeChannel") instead of collapsing
         # to the bare domain — a specific channel/account is trackable even on
         # an otherwise-always-blocked platform, but the bare platform isn't.
-        domain = text.strip().lower().removeprefix("https://").removeprefix("http://").rstrip("/")
-        if _is_bare_platform_domain(domain):
-            await update.message.reply_text(_t(ul, "bare_platform_rejected", sources=domain))
-            return
+        domains = [
+            s.removeprefix("https://").removeprefix("http://").rstrip("/").lower()
+            for s in _split_sources(text)
+        ]
+        valid, rejected = _filter_valid_sources(domains)
         topic = await store.get_topic(update.effective_user.id, topic_id)  # type: ignore[union-attr]
         if topic is None:
             await update.message.reply_text(_t(ul, "topic_nf"))
             return
-        if domain not in topic.sources:
-            await store.update_topic(topic_id, sources=[*topic.sources, domain])
-        await update.message.reply_text(
-            _t(ul, "source_added_check", source=domain, name=topic_name), parse_mode="Markdown"
-        )
+        new_domains = [d for d in valid if d not in topic.sources]
+        if new_domains:
+            await store.update_topic(topic_id, sources=[*topic.sources, *new_domains])
+        if valid:
+            await update.message.reply_text(
+                _t(ul, "source_added_check", source=", ".join(valid), name=topic_name),
+                parse_mode="Markdown",
+            )
+        if rejected:
+            await update.message.reply_text(
+                _t(ul, "bare_platform_rejected", sources=", ".join(rejected))
+            )
         return
 
-    # Inline add ignored source (triggered by 🚫 Always ignore button)
+    # Inline add ignored source (triggered by 🚫 Always ignore button) — accepts
+    # multiple at once; no bare-platform restriction since excluding a whole
+    # platform site-wide (e.g. all of youtube.com) is a legitimate use case.
     if ud is not None and ud.get("awaiting_block_id"):
         from uuid import UUID
 
         topic_id = UUID(ud.pop("awaiting_block_id"))
         topic_name = ud.pop("awaiting_block_name", "")
-        domain = text.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
+        domains = [
+            s.removeprefix("https://").removeprefix("http://").split("/")[0].lower()
+            for s in _split_sources(text)
+        ]
         topic = await store.get_topic(update.effective_user.id, topic_id)  # type: ignore[union-attr]
         if topic is None:
             await update.message.reply_text(_t(ul, "topic_nf"))
             return
-        if domain not in topic.excluded_sources:
-            await store.update_topic(topic_id, excluded_sources=[*topic.excluded_sources, domain])
+        new_domains = [d for d in domains if d not in topic.excluded_sources]
+        if new_domains:
+            await store.update_topic(
+                topic_id, excluded_sources=[*topic.excluded_sources, *new_domains]
+            )
         await update.message.reply_text(
-            _t(ul, "block_added_confirm", domain=domain, name=topic_name), parse_mode="Markdown"
+            _t(ul, "block_added_confirm", domain=", ".join(domains), name=topic_name),
+            parse_mode="Markdown",
         )
         return
 

@@ -802,3 +802,26 @@ Caught a bug in my own `_own_domain()` via its own test: it checked
 `https://` scheme, so `https://www.instagram.com/someaccount` split on
 "/" gave "https:" as the first segment (no dot) and wrongly returned
 None. Fixed by stripping the scheme first.
+
+## 2026-06-24 17:40 — Multi-source fix missed a second, different code path
+
+User: added sources to an *existing* topic ("Влияние войны") via the sources
+view's "➕ Always check" button, and they still showed up jammed together.
+The earlier fix only patched `_got_sources_text` (the /add_topic *creation*
+flow) — the inline "add source to an existing topic" handler in `on_text`
+is a completely separate code path that never called `_split_sources()` at
+all; it treated the entire message as one single domain string, so multiple
+sources pasted at once became one jammed entry. Same root cause, different
+handler — I'd only checked the creation flow, not this one.
+
+Fixed both inline flows ("add source" and "add ignored source") to split on
+the same comma/semicolon/newline separators and add all of them at once.
+The "ignored" side deliberately skips the bare-platform-domain rejection —
+excluding all of youtube.com site-wide is a legitimate use case, unlike
+trying to *track* "all of YouTube" as one source.
+
+Also found and repaired the actual corrupted data this had already produced
+in the dev DB: topic "Влияние войны" had one source entry equal to
+`"ria.ru\ntass.ru\nrt.ru\nkommersant.ru\nrbc.ru\nmeduza.io"` — ran
+`_split_sources()` against it directly and wrote the corrected 6-source list
+back, verified in the DB before restarting the bot.
