@@ -142,6 +142,33 @@ async def set_user_language(telegram_id: int, language: str) -> None:
     )
 
 
+async def get_user_timezone(telegram_id: int) -> str:
+    row = await db.fetchrow(
+        "SELECT timezone FROM elephant_users WHERE telegram_id = $1",
+        telegram_id,
+    )
+    return str(row["timezone"]) if row else "UTC"
+
+
+async def set_user_timezone(telegram_id: int, timezone: str) -> None:
+    """Set the profile-level timezone and fan it out to every existing topic.
+
+    jobs.py's scheduling reads topic.timezone directly, so this keeps that
+    working unmodified while the profile setting is the one a user actually
+    edits — changing it updates every topic at once, not just one.
+    """
+    await db.execute(
+        "UPDATE elephant_users SET timezone = $1 WHERE telegram_id = $2",
+        timezone,
+        telegram_id,
+    )
+    await db.execute(
+        "UPDATE elephant_topics SET timezone = $1 WHERE telegram_id = $2",
+        timezone,
+        telegram_id,
+    )
+
+
 async def set_topic_display_fields(
     topic_id: UUID,
     display_name: str | None,

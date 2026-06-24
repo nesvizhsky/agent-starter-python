@@ -560,3 +560,52 @@ Investigated rather than assumed:
   reach a real public feed." Left it to the existing Perplexity fallback,
   which should cover a mainstream outlet like RBC reasonably (this isn't the
   obscure-state-media case Perplexity specifically struggles with).
+
+## 2026-06-24 15:00 — Eight onboarding fixes from real user feedback
+
+A real user hit friction during /add_topic; the user (Ana) relayed 8 concrete
+complaints rather than one vague "onboarding is bad." Fixed all eight:
+
+1. **Technical source_guidance leak**: the "Prioritise: TASS, RIA Novosti...
+   Do not cite: YouTube..." research-prompt text was shown verbatim on the
+   name-confirmation screen — internal LLM-prompt material, not user-facing.
+   Removed it from both places that screen renders (initial + the "back" path).
+2. **`/start` ignored language setting**: `_WELCOME` was a bare English
+   constant, never run through `_t()`/`_lang()`. Added "welcome" +
+   button-label keys to `_UI`, converted `_START_KEYBOARD` to a
+   `_start_keyboard(lang)` function. Also caught and fixed `on_start_nav`,
+   which had the same bug for its own strings.
+3. **Confirmation easy to miss**: a user didn't notice their topic saved and
+   thought it failed — the final message was just another small "✓ ..." line,
+   visually identical to every per-step confirmation earlier in the same
+   conversation (✓ name, ✓ schedule, ✓ timezone...). Replaced with a
+   distinct 🎉-headed box.
+4. **No manual-only option**: added "🔕 No schedule — check manually" to the
+   schedule-type step (first slot only — doesn't make sense as an *additional*
+   slot). Jumps straight past days/time to wherever the normal flow lands
+   next. due_slots() already handles an empty slot list correctly (nothing to
+   iterate → never fires), so no jobs.py change needed.
+5. **Timezone was per-topic**: confusing — changing it only affected one
+   topic. Moved to profile-level: new `elephant_users.timezone` column
+   (migration 011, backfilled from each user's most recent non-UTC topic),
+   `store.get_user_timezone()`/`set_user_timezone()`. jobs.py still reads
+   `topic.timezone` directly for scheduling, so `set_user_timezone()` fans the
+   write out to every topic instead of touching jobs.py — smaller, lower-risk
+   change than threading a user-timezone lookup through the scheduler.
+   Topic creation now silently applies the profile timezone (no question
+   asked); `/timezone` sets it for everything at once instead of picking a
+   topic first.
+6. **Only 12 timezones shown**: expanded to 26, covering every populated
+   whole-hour offset plus the common half/quarter-hour ones (India, Tehran,
+   Adelaide), not a sparse sample.
+7. **Garbled timezone button labels** ("utc...gapore"): the old layout was 3
+   long, double-spaced labels per row — too wide for some clients. Single
+   space, shorter city names, 2 per row.
+8. **No quick check after creating a topic**: realized the existing
+   `ta:check:{topic_id}` callback (already used by the topic-picker's /check
+   flow) could be reused directly — just added a button with that same
+   callback_data to the new-topic confirmation message. No new handler needed.
+
+Removed dead code along the way: the entire per-topic `_ASK_TZ` conversation
+state, `_ask_tz`/`_got_tz`/`_back_from_tz`, the per-topic `set_tz` action in
+`on_topic_action`, and `on_tz_set` — all replaced by the profile-level path.

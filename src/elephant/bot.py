@@ -52,7 +52,6 @@ _AT_NAME_CONFIRM = 1  # /add_topic: confirm LLM-generated name
 _ASK_SCHED_TYPE = 2  # both: pick frequency type
 _ASK_SCHED_DAYS = 3  # both: pick days (custom/weekly/biweekly)
 _ASK_TIME = 4  # both: type a time
-_ASK_TZ = 5  # /add_topic only: pick timezone
 _AT_SOURCES = 6  # /add_topic only: enter sources
 _SC_PICK = 7  # /schedule: topic picker
 _ASK_ADD_ANOTHER = 8  # both: "add another checkup time?" after each slot
@@ -102,6 +101,7 @@ _SCHED_TYPE_LABELS: dict[str, str] = {
     "twice_daily": "Twice daily",
     "custom_days": "Pick days…",
     "biweekly": "Every 2 weeks",
+    "manual": "No schedule — check manually",
 }
 
 # ---------------------------------------------------------------------------
@@ -125,6 +125,11 @@ _UI: dict[str, str] = {
     "never_sent": "never sent",
     "cleared_n": "✓ Cleared {n} seen articles for *{name}*. Use /check to fetch fresh results.",
     "topics_header": "Your {n} topic(s):",
+    "welcome": "Welcome to *Eat the Elephant* 🐘\n\nTrack any topic. Get daily briefings from sources that disagree. One bite at a time.",  # noqa: E501
+    "btn_add_topic": "➕ Add topic",
+    "btn_my_topics": "📋 My topics",
+    "btn_check_now": "▶ Check now",
+    "no_topics_short": "You have no topics yet.",
     # Schedule type labels
     "sched_daily": "Every day",
     "sched_twice_daily": "Twice daily",
@@ -158,20 +163,39 @@ _ui_cache: dict[str, dict[str, str]] = {"English": _UI}
 # Frequency types that require a day-selection step
 _NEEDS_DAYS = frozenset({"custom_days", "biweekly"})
 
-# (display label, IANA timezone name)
+# (display label, IANA timezone name) — covers every populated whole-hour UTC
+# offset plus the common half/quarter-hour ones, not just a sparse sample.
+# Single space (not double) and short city names so labels stay fully
+# readable on narrow mobile screens at 2-per-row (see _timezone_keyboard) —
+# the old 3-per-row, double-spaced layout got visually truncated by Telegram
+# on some clients (e.g. "UTC+8  Singapore" rendering as "utc...gapore").
 _TIMEZONES = [
-    ("UTC-8  LA", "America/Los_Angeles"),
-    ("UTC-6  Chicago", "America/Chicago"),
-    ("UTC-5  New York", "America/New_York"),
-    ("UTC+0  London", "Europe/London"),
-    ("UTC+1  Paris", "Europe/Paris"),
-    ("UTC+2  Helsinki", "Europe/Helsinki"),
-    ("UTC+3  Moscow", "Europe/Moscow"),
-    ("UTC+4  Dubai", "Asia/Dubai"),
-    ("UTC+5:30  India", "Asia/Kolkata"),
-    ("UTC+8  Singapore", "Asia/Singapore"),
-    ("UTC+9  Tokyo", "Asia/Tokyo"),
-    ("UTC+10  Sydney", "Australia/Sydney"),
+    ("UTC-11 Samoa", "Pacific/Pago_Pago"),
+    ("UTC-10 Honolulu", "Pacific/Honolulu"),
+    ("UTC-9 Anchorage", "America/Anchorage"),
+    ("UTC-8 LA", "America/Los_Angeles"),
+    ("UTC-7 Denver", "America/Denver"),
+    ("UTC-6 Chicago", "America/Chicago"),
+    ("UTC-5 New York", "America/New_York"),
+    ("UTC-4 Santiago", "America/Santiago"),
+    ("UTC-3 B.Aires", "America/Argentina/Buenos_Aires"),
+    ("UTC-1 Azores", "Atlantic/Azores"),
+    ("UTC+0 London", "Europe/London"),
+    ("UTC+1 Paris", "Europe/Paris"),
+    ("UTC+2 Helsinki", "Europe/Helsinki"),
+    ("UTC+3 Moscow", "Europe/Moscow"),
+    ("UTC+3:30 Tehran", "Asia/Tehran"),
+    ("UTC+4 Dubai", "Asia/Dubai"),
+    ("UTC+5 Karachi", "Asia/Karachi"),
+    ("UTC+5:30 India", "Asia/Kolkata"),
+    ("UTC+6 Dhaka", "Asia/Dhaka"),
+    ("UTC+7 Bangkok", "Asia/Bangkok"),
+    ("UTC+8 Singapore", "Asia/Singapore"),
+    ("UTC+9 Tokyo", "Asia/Tokyo"),
+    ("UTC+9:30 Adelaide", "Australia/Adelaide"),
+    ("UTC+10 Sydney", "Australia/Sydney"),
+    ("UTC+11 Noumea", "Pacific/Noumea"),
+    ("UTC+12 Auckland", "Pacific/Auckland"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -277,22 +301,19 @@ async def _reply(update: Update, text: str, **kwargs: object) -> None:
 # /start
 # ---------------------------------------------------------------------------
 
-_WELCOME = (
-    "Welcome to *Eat the Elephant* 🐘\n\n"
-    "Track any topic. Get daily briefings from sources that disagree. One bite at a time."
-)
 
-_START_KEYBOARD = InlineKeyboardMarkup(
-    [
+def _start_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("➕ Add topic", callback_data="start:add_topic"),
-            InlineKeyboardButton("📋 My topics", callback_data="start:topics"),
-        ],
-        [
-            InlineKeyboardButton("▶ Check now", callback_data="start:check"),
-        ],
-    ]
-)
+            [
+                InlineKeyboardButton(_t(lang, "btn_add_topic"), callback_data="start:add_topic"),
+                InlineKeyboardButton(_t(lang, "btn_my_topics"), callback_data="start:topics"),
+            ],
+            [
+                InlineKeyboardButton(_t(lang, "btn_check_now"), callback_data="start:check"),
+            ],
+        ]
+    )
 
 
 async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -302,7 +323,10 @@ async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if tg is None:
         return
     await store.get_or_create_user(tg.id, tg.first_name, tg.username)
-    await update.message.reply_text(_WELCOME, parse_mode="Markdown", reply_markup=_START_KEYBOARD)
+    lang = await _lang(tg.id)
+    await update.message.reply_text(
+        _t(lang, "welcome"), parse_mode="Markdown", reply_markup=_start_keyboard(lang)
+    )
 
 
 async def _start_add_topic_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -328,17 +352,18 @@ async def on_start_nav(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     await _safe_answer(query)
     action = query.data.split(":", 1)[1]
     tg_id = query.from_user.id
+    lang = await _lang(tg_id)
 
     if action == "topics":
         topics = await store.get_topics(tg_id)
         if not topics:
             await query.message.reply_text(  # type: ignore[union-attr]
-                "You have no topics yet.", reply_markup=_START_KEYBOARD
+                _t(lang, "no_topics_short"), reply_markup=_start_keyboard(lang)
             )
         else:
-            await query.message.reply_text(f"Your {len(topics)} topic(s):")  # type: ignore[union-attr]
+            await query.message.reply_text(_t(lang, "topics_header", n=len(topics)))  # type: ignore[union-attr]
             for t in topics:
-                text, keyboard = _topic_card(t)
+                text, keyboard = _topic_card(t, lang)
                 await query.message.reply_text(text, reply_markup=keyboard, parse_mode="Markdown")  # type: ignore[union-attr]
 
     elif action == "check":
@@ -392,7 +417,7 @@ async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["new_topic_sides_json"] = json.dumps([s.model_dump() for s in sides])
 
     await update.message.reply_text(
-        f"📌 *{name}*\n🔍 _{expanded}_\n🌐 _{guidance}_\n\nLooks good?",
+        f"📌 *{name}*\n🔍 _{expanded}_\n\nLooks good?",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
@@ -517,18 +542,22 @@ def _back_button() -> InlineKeyboardButton:
 async def _ask_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     n_slots = len(context.user_data.get("new_topic_slots", [])) if context.user_data else 0
     prompt = "Add another checkup — how often?" if n_slots else "How often would you like updates?"
-    keyboard = InlineKeyboardMarkup(
+    rows = [
         [
-            [
-                InlineKeyboardButton("Every day", callback_data="sched:daily"),
-                InlineKeyboardButton("Twice daily", callback_data="sched:twice_daily"),
-            ],
-            [InlineKeyboardButton("Pick days…", callback_data="sched:custom_days")],
-            [InlineKeyboardButton("Every 2 weeks", callback_data="sched:biweekly")],
-            [_back_button()],
-        ]
-    )
-    await _reply(update, prompt, reply_markup=keyboard)
+            InlineKeyboardButton("Every day", callback_data="sched:daily"),
+            InlineKeyboardButton("Twice daily", callback_data="sched:twice_daily"),
+        ],
+        [InlineKeyboardButton("Pick days…", callback_data="sched:custom_days")],
+        [InlineKeyboardButton("Every 2 weeks", callback_data="sched:biweekly")],
+    ]
+    # Only offered for the first checkup slot — once a topic already has a scheduled
+    # slot, "no schedule" doesn't make sense as an *additional* one.
+    if not n_slots:
+        rows.append(
+            [InlineKeyboardButton("🔕 No schedule — check manually", callback_data="sched:manual")]
+        )
+    rows.append([_back_button()])
+    await _reply(update, prompt, reply_markup=InlineKeyboardMarkup(rows))
     return _ASK_SCHED_TYPE
 
 
@@ -555,9 +584,8 @@ async def _back_from_sched_type(update: Update, context: ContextTypes.DEFAULT_TY
 
     name = ud.get("new_topic_name", "")
     desc = ud.get("new_topic_desc", "")
-    guidance = ud.get("new_topic_source_guidance", "")
     await query.edit_message_text(
-        f"📌 *{name}*\n🔍 _{desc}_\n🌐 _{guidance}_\n\nLooks good?",
+        f"📌 *{name}*\n🔍 _{desc}_\n\nLooks good?",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
@@ -579,6 +607,13 @@ async def _got_sched_type(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     freq = query.data.split(":", 1)[1]
     context.user_data["new_topic_freq"] = freq
     await query.edit_message_text(f"✓ {_SCHED_TYPE_LABELS.get(freq, freq)}")
+
+    if freq == "manual":
+        # No slot to add — jump straight to wherever the "Done" path of the
+        # add-another step would go, same as finishing a topic with slots.
+        if context.user_data.get("sched_mode") == "update":
+            return await _update_schedule(update, context)
+        return await _use_profile_tz_and_continue(update, context)
 
     if freq in _NEEDS_DAYS:
         mode = "multi" if freq == "custom_days" else "single"
@@ -821,7 +856,7 @@ async def _got_add_another(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.edit_message_text("✓ Done")
     if context.user_data.get("sched_mode") == "update":
         return await _update_schedule(update, context)
-    return await _ask_tz(update, context)
+    return await _use_profile_tz_and_continue(update, context)
 
 
 async def _update_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -856,52 +891,35 @@ async def _update_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 # ---------------------------------------------------------------------------
-# Timezone step (add_topic only)
+# Timezone — a profile-level (per-user) setting, not per-topic. New topics
+# pick it up automatically from the profile; /timezone changes it for every
+# topic at once. See cmd_timezone / on_profile_tz_set below.
 # ---------------------------------------------------------------------------
 
 
-async def _ask_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    def _tz_btn(lbl: str, zone: str) -> InlineKeyboardButton:
-        return InlineKeyboardButton(lbl, callback_data=f"tz:{zone}")
+def _timezone_keyboard(callback_prefix: str) -> InlineKeyboardMarkup:
+    """2 buttons per row — 3 per row with these label lengths was getting
+    visually truncated by Telegram on some clients (e.g. "UTC+8  Singapore"
+    rendering as "utc...gapore")."""
 
-    rows = [
-        [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[:3]],
-        [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[3:6]],
-        [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[6:9]],
-        [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[9:]],
-        [_back_button()],
-    ]
-    await _reply(
-        update,
-        "What's your timezone?\n\n"
-        "_Note: Telegram can't read your device timezone. "
-        "Use /timezone to update it when you travel._",
-        reply_markup=InlineKeyboardMarkup(rows),
-        parse_mode="Markdown",
+    def _btn(lbl: str, zone: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(lbl, callback_data=f"{callback_prefix}{zone}")
+
+    return InlineKeyboardMarkup(
+        [
+            [_btn(lbl, zone) for lbl, zone in _TIMEZONES[i : i + 2]]
+            for i in range(0, len(_TIMEZONES), 2)
+        ]
     )
-    return _ASK_TZ
 
 
-async def _back_from_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """← from the timezone screen: return to the add-another-checkup prompt."""
-    query = update.callback_query
-    if query is None:
-        return _ASK_TZ
-    await _safe_answer(query)
-    await query.edit_message_text("← Back")
-    await _reply(update, "Add another checkup time?", reply_markup=_add_another_keyboard())
-    return _ASK_ADD_ANOTHER
-
-
-async def _got_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    if query is None or context.user_data is None:
-        return _ASK_TZ
-    await _safe_answer(query)
-    tz = query.data.split(":", 1)[1] if query.data else "UTC"
-    context.user_data["new_topic_tz"] = tz
-    label = next((lbl for lbl, z in _TIMEZONES if z == tz), tz)
-    await query.edit_message_text(f"✓ {label}")
+async def _use_profile_tz_and_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Apply the user's profile timezone to the new topic with no question asked,
+    then continue to the sources step — replaces the old per-topic ask."""
+    tg = update.effective_user
+    if tg is None or context.user_data is None:
+        return await _ask_sources(update, context)
+    context.user_data["new_topic_tz"] = await store.get_user_timezone(tg.id)
     return await _ask_sources(update, context)
 
 
@@ -963,16 +981,25 @@ async def _create_topic(
     )
     label = _sched_label_for_slots(slots, tz)
     tz_label = next((lbl for lbl, z in _TIMEZONES if z == tz), tz)
+    # Distinct from the many small "✓ ..." step confirmations earlier in this same
+    # flow (✓ name, ✓ schedule, ✓ timezone, ...) — a user reported missing that
+    # their topic was actually saved because the final message looked the same as
+    # those intermediate ones. A heading + box makes "topic now exists" unambiguous.
     msg = (
-        f"✓ *{topic.name}* created.\n"
-        f"{label}  ·  {tz_label}\n"
-        f"Sources: {', '.join(sources) if sources else 'general'}\n\n"
-        "Use /check to get a digest right now."
+        f"🎉 *Topic created: {topic.name}*\n"
+        "━━━━━━━━━━━━━━━\n"
+        f"🗓 {label}  ·  {tz_label}\n"
+        f"📰 Sources: {', '.join(sources) if sources else 'general'}"
+    )
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("▶️ Check now", callback_data=f"ta:check:{topic.id}")]]
     )
     if update.message:
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="Markdown")
     elif update.callback_query:
-        await update.callback_query.message.reply_text(msg, parse_mode="Markdown")  # type: ignore[union-attr]
+        await update.callback_query.message.reply_text(  # type: ignore[union-attr]
+            msg, reply_markup=keyboard, parse_mode="Markdown"
+        )
     return ConversationHandler.END
 
 
@@ -1159,23 +1186,6 @@ async def on_topic_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode="Markdown",
         )
 
-    elif action == "set_tz":
-
-        def _tz_btn(lbl: str, zone: str) -> InlineKeyboardButton:
-            return InlineKeyboardButton(lbl, callback_data=f"tzset:{zone}:{topic.id}")
-
-        rows = [
-            [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[:3]],
-            [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[3:6]],
-            [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[6:9]],
-            [_tz_btn(lbl, zone) for lbl, zone in _TIMEZONES[9:]],
-        ]
-        await query.edit_message_text(
-            f"New timezone for *{_short(topic.name)}*:",
-            reply_markup=InlineKeyboardMarkup(rows),
-            parse_mode="Markdown",
-        )
-
 
 async def on_topic_delete_confirm(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Callback for the delete-confirmation buttons (td:{confirm|cancel}:{topic_id})."""
@@ -1205,31 +1215,18 @@ async def on_topic_delete_confirm(update: Update, _ctx: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(f"✓ *{_short(topic.name)}* deleted.", parse_mode="Markdown")
 
 
-async def on_tz_set(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Callback for /timezone timezone buttons (tzset:{zone}:{topic_id})."""
+async def on_profile_tz_set(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback for /timezone buttons (tzprofile:{zone}) — sets the timezone for
+    the whole profile (every topic), not just one."""
     query = update.callback_query
     if query is None or query.from_user is None or query.data is None:
         return
     await _safe_answer(query)
+    zone = query.data.split(":", 1)[1]
 
-    parts = query.data.split(":", 2)
-    if len(parts) != 3:
-        return
-    _pfx, zone, topic_id_str = parts
-
-    from uuid import UUID
-
-    topic = await store.get_topic(query.from_user.id, UUID(topic_id_str))
-    if topic is None:
-        ul_tz = await _lang(query.from_user.id)
-        await query.edit_message_text(_t(ul_tz, "topic_nf"))
-        return
-
-    await store.update_topic(topic.id, timezone=zone)
+    await store.set_user_timezone(query.from_user.id, zone)
     label = next((lbl for lbl, z in _TIMEZONES if z == zone), zone)
-    await query.edit_message_text(
-        f"✓ Timezone for *{_short(topic.name)}* → {label}.", parse_mode="Markdown"
-    )
+    await query.edit_message_text(f"✓ Timezone set to {label} for all your topics.")
 
 
 async def _show_sources_view(query: object, topic: Topic) -> None:
@@ -1519,17 +1516,26 @@ async def cmd_topics(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /timezone — change timezone for a topic
+# /timezone — change the profile-level timezone (every topic at once)
 # ---------------------------------------------------------------------------
 
 
 async def cmd_timezone(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sets the timezone for the whole profile (every topic at once) — not
+    per-topic. Users were confused that changing it only affected one topic."""
     if update.message is None or not await _allowed(update):
         return
     tg = update.effective_user
     if tg is None:
         return
-    await _topic_picker(update, tg.id, "set_tz", "Update timezone for which topic?")
+    current = await store.get_user_timezone(tg.id)
+    current_label = next((lbl for lbl, z in _TIMEZONES if z == current), current)
+    await update.message.reply_text(
+        f"Your current timezone: *{current_label}*\n\n"
+        "Pick a new one — this updates every topic, not just one:",
+        reply_markup=_timezone_keyboard("tzprofile:"),
+        parse_mode="Markdown",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2076,7 +2082,7 @@ async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
         BotCommand("topics", "Show all your topics"),
         BotCommand("add_topic", "Track a new topic"),
         BotCommand("check", "Get a digest now"),
-        BotCommand("timezone", "Update timezone for a topic"),
+        BotCommand("timezone", "Update your timezone"),
         BotCommand("language", "Set digest language"),
     ]
     await app.bot.set_my_commands(_cmds_en)
@@ -2140,10 +2146,6 @@ def build_application() -> Application:  # type: ignore[type-arg]
                 CallbackQueryHandler(_back_from_time, pattern=r"^nav:back$"),
             ],
             _ASK_ADD_ANOTHER: [CallbackQueryHandler(_got_add_another, pattern=r"^slot:")],
-            _ASK_TZ: [
-                CallbackQueryHandler(_got_tz, pattern=r"^tz:"),
-                CallbackQueryHandler(_back_from_tz, pattern=r"^nav:back$"),
-            ],
             _AT_SOURCES: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, _got_sources_text),
                 CallbackQueryHandler(_got_sources_skip, pattern=r"^sources:skip"),
@@ -2182,7 +2184,7 @@ def build_application() -> Application:  # type: ignore[type-arg]
     app.add_handler(CallbackQueryHandler(on_topic_panel, pattern=r"^tp:"))
     app.add_handler(CallbackQueryHandler(on_topic_action, pattern=r"^ta:"))
     app.add_handler(CallbackQueryHandler(on_topic_delete_confirm, pattern=r"^td:"))
-    app.add_handler(CallbackQueryHandler(on_tz_set, pattern=r"^tzset:"))
+    app.add_handler(CallbackQueryHandler(on_profile_tz_set, pattern=r"^tzprofile:"))
     app.add_handler(CallbackQueryHandler(_cb_language, pattern=r"^lang:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
