@@ -40,6 +40,33 @@ def test_date_from_url_path_invalid_date() -> None:
     assert _date_from_url_path("https://example.com/2026/99/99/story") is None
 
 
+def test_date_from_url_path_compact_yyyymmdd_segment() -> None:
+    """Regression: butlereagle.com-style URLs embed YYYYMMDD as one path
+    segment ("/20260619/...") instead of slash-separated — this is the exact
+    URL of a 19-day-old Stonehenge story that slipped through the freshness
+    filter as "undated" (and therefore unconditionally fresh) in production."""
+    dt = _date_from_url_path(
+        "https://www.butlereagle.com/20260619/archaeology-team-unearths-prototype/"
+    )
+    assert dt == datetime(2026, 6, 19, tzinfo=UTC)
+
+
+def test_date_from_url_path_filename_with_embedded_date() -> None:
+    """Regression: sciencedaily.com-style URLs have /YYYY/MM/ as normal
+    segments but the day is embedded in a numeric filename prefix
+    ("260603023914.htm") rather than its own path segment — another
+    21-day-old story that slipped through the same way in production."""
+    dt = _date_from_url_path("https://www.sciencedaily.com/releases/2026/06/260603023914.htm")
+    assert dt == datetime(2026, 6, 3, tzinfo=UTC)
+
+
+def test_date_from_url_path_filename_rejects_mismatched_prefix() -> None:
+    """The filename-prefix pattern must not fire on a coincidental numeric
+    filename that doesn't actually repeat the URL's own year/month."""
+    url = "https://www.sciencedaily.com/releases/2026/06/999999123.htm"
+    assert _date_from_url_path(url) is None
+
+
 # ---------------------------------------------------------------------------
 # Offline: ISO parsing
 # ---------------------------------------------------------------------------

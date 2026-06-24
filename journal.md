@@ -1026,3 +1026,47 @@ tests using `monkeypatch` on `jobs._run_digest` to simulate a slow
 pipeline and assert the second concurrent call returns False while the
 first is in flight, and that sequential calls (lock released) both
 succeed normally.
+
+## 2026-06-24 19:55 — Stale articles weren't a race — undated URLs bypassing the freshness filter
+
+The "duplicate results" investigation turned up something else: the repeated
+manual checks weren't actually overlapping (confirmed via log timestamps —
+each "digest pipeline" start came strictly after the previous run's "digest
+sent", so the new per-topic lock correctly let each one through). What was
+actually happening: each check genuinely found different "fresh" articles,
+including some clearly stale ones — a 19-day-old Stonehenge story and a
+21-day-old ScienceDaily piece both showed up labeled with today's date.
+
+Traced it to `dedup.py`'s freshness filter, which only excludes an article
+with a *known* old `published_at` — if `article_dates.py` couldn't resolve a
+date at all, the article passes through unconditionally, regardless of true
+age. This was a known, documented trade-off from the original 2026-06-20 fix
+("fails open for the minority of pages with no date signal") — not a
+regression, just the residual gap from that fix surfacing now under heavy
+repeated testing on a topic prone to evergreen/recirculated content.
+
+User asked the right question before picking a policy: were OTHER undated
+articles like this already happening, or was this a one-off? Ran `gather()`
+across every active production topic and collected every undated article's
+URL — 101 of them. Inspecting them showed the two flagged stories had dates
+sitting right in their URLs the whole time (butlereagle.com's
+"/20260619/...", sciencedaily.com's "/2026/06/260603023914.htm") that the
+existing URL-date regex just didn't have a pattern for — a real, fixable
+extraction bug, not evidence that the "fail open" policy itself was wrong.
+
+Surveyed all 101 URLs for shapes instead of patching one outlet at a time,
+and consolidated four general patterns covering the bulk of them: YYYY-MM-DD
+as a dash-joined token anywhere in the path (not just its own segment),
+month-name-DD-YYYY embedded in a slug (understandingwar.org, fdd.org),
+YYYYMMDD as 8 bounded digits (butlereagle.com, archive.org, acaps.org), plus
+keeping the existing /YYYY/MM/DD/ slash pattern and the sciencedaily-specific
+filename-prefix pattern. Verified against all 101 real URLs: 36 now resolve
+purely from the URL (zero before for these specific shapes). The remaining
+~59 are mostly genuine hub/category pages (`/category/news`, `/topic/x`,
+bare domains, `/tag/war`) — a different problem (hub-page detection, not
+date detection) — or genuinely dateless utility/video pages already covered
+by the existing meta-tag fallback. Given this directly fixes the actual
+demonstrated harm without the recall trade-off of excluding all undated
+articles, decided against the broader "exclude undated by default" policy
+change for now — the residual bucket no longer skews toward real dateable
+news.

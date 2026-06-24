@@ -30,7 +30,53 @@ _FETCH_TIMEOUT = 5.0
 _MAX_CONCURRENT_FETCHES = 10
 _HEAD_BYTES_TO_SCAN = 20_000  # publish-date metadata always lives in <head>
 
-_URL_DATE_RE = re.compile(r"/(20\d{2})/(\d{1,2})/(\d{1,2})(?:/|$)")
+# Surveyed real undated articles across every active production topic to find
+# every URL date shape actually in use, rather than patching one outlet at a
+# time as reports trickled in. Four shapes cover the large majority:
+#
+# 1. /YYYY/MM/DD/ — slash-separated segments (nytimes.com, most WordPress sites)
+# 2. YYYY-MM-DD — a dash-joined token anywhere in the path, not necessarily its
+#    own segment (newsroom.ibm.com "/2026-06-22-ibm-...", iz.ru "/2026-06-24/",
+#    reuters.com "...-2026-06-23/")
+# 3. <month-name>-DD-YYYY — a month name (full or abbreviated) embedded in a
+#    slug (understandingwar.org "...-june-22-2026/", fdd.org "/june-22-2026/")
+# 4. YYYYMMDD — 8 consecutive digits forming a date, bounded so it doesn't
+#    match into a longer digit run (butlereagle.com "/20260619/", archive.org
+#    "RT_20260623_210000_News", acaps.org "/20260622_ACAPS_...")
+# 5. /YYYY/MM/<YYMMDD...>.ext — year/month as normal slash segments, day
+#    embedded in a numeric filename whose first 6 digits repeat YY+MM+DD
+#    (sciencedaily.com "/releases/2026/06/260603023914.htm")
+_URL_DATE_SLASH_RE = re.compile(r"/(20\d{2})/(\d{1,2})/(\d{1,2})(?:/|$)")
+_URL_DATE_DASH_RE = re.compile(r"(?<!\d)(20\d{2})-(\d{2})-(\d{2})(?!\d)")
+_URL_DATE_COMPACT_RE = re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)")
+_MONTH_NAMES = (
+    "january|february|march|april|may|june|july|august|september|october|"
+    "november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec"
+)
+_URL_DATE_SLUG_MONTH_RE = re.compile(
+    rf"(?<![a-z])({_MONTH_NAMES})-(\d{{1,2}})-(20\d{{2}})(?:/|$|[^0-9a-z])", re.I
+)
+_URL_DATE_FILENAME_RE = re.compile(r"/(20\d{2})/(\d{2})/(\d{2})(\d{2})(\d{2})\d*\.\w+$")
+_MONTH_NAME_TO_NUM = {
+    name: i + 1
+    for i, names in enumerate(
+        [
+            ("january", "jan"),
+            ("february", "feb"),
+            ("march", "mar"),
+            ("april", "apr"),
+            ("may",),
+            ("june", "jun"),
+            ("july", "jul"),
+            ("august", "aug"),
+            ("september", "sep"),
+            ("october", "oct"),
+            ("november", "nov"),
+            ("december", "dec"),
+        ]
+    )
+    for name in names
+}
 
 _META_DATE_PATTERNS = (
     re.compile(r'property=["\']article:published_time["\']\s+content=["\']([^"\']+)', re.I),
@@ -49,14 +95,53 @@ def _parse_iso(raw: str) -> datetime | None:
 
 
 def _date_from_url_path(url: str) -> datetime | None:
-    match = _URL_DATE_RE.search(urlparse(url).path)
-    if not match:
-        return None
-    year, month, day = (int(g) for g in match.groups())
-    try:
-        return datetime(year, month, day, tzinfo=UTC)
-    except ValueError:
-        return None
+    path = urlparse(url).path
+
+    match = _URL_DATE_SLASH_RE.search(path)
+    if match:
+        year, month, day = (int(g) for g in match.groups())
+        try:
+            return datetime(year, month, day, tzinfo=UTC)
+        except ValueError:
+            pass
+
+    match = _URL_DATE_DASH_RE.search(path)
+    if match:
+        year, month, day = (int(g) for g in match.groups())
+        try:
+            return datetime(year, month, day, tzinfo=UTC)
+        except ValueError:
+            pass
+
+    match = _URL_DATE_SLUG_MONTH_RE.search(path)
+    if match:
+        month_name, day, year = match.groups()
+        try:
+            return datetime(int(year), _MONTH_NAME_TO_NUM[month_name.lower()], int(day), tzinfo=UTC)
+        except ValueError:
+            pass
+
+    match = _URL_DATE_COMPACT_RE.search(path)
+    if match:
+        year, month, day = (int(g) for g in match.groups())
+        try:
+            return datetime(year, month, day, tzinfo=UTC)
+        except ValueError:
+            pass
+
+    match = _URL_DATE_FILENAME_RE.search(path)
+    if match:
+        year_full, month, year_suffix, month_repeat, day = match.groups()
+        # Sanity-check the filename's leading YYMMDD against the URL's own
+        # year/month segments before trusting it — only trust a real date
+        # match, not a coincidental numeric prefix.
+        if year_suffix == year_full[2:] and month_repeat == month:
+            try:
+                return datetime(int(year_full), int(month), int(day), tzinfo=UTC)
+            except ValueError:
+                pass
+
+    return None
 
 
 async def _date_from_page(client: httpx.AsyncClient, url: str) -> datetime | None:
