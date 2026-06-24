@@ -482,12 +482,17 @@ _guidance_extractor: Agent[None, SourceGuidance] = Agent(
         "spectrum of editorial opinions), include every party's outlets symmetrically — "
         "never omit a party's side. Start directly with 'Prioritise:' — no preamble.\n\n"
         "outlets: separately, list 3-5 of the single most authoritative GENERAL-PURPOSE "
-        "outlets named in the text (specialist publications, major wire services) — outlets "
-        "anyone tracking this topic should read regardless of which side of any dispute they "
-        "favor. Do NOT include party/side-specific or state-aligned outlets here even if "
-        "named in the text — those are handled separately. Use the outlet's real name only "
-        "(e.g. 'Archaeology Magazine', not a URL). Empty list if the text named no clear "
-        "general-purpose outlets."
+        "outlets named in the text (specialist NEWS publications, major wire services, "
+        "established journals/magazines) — outlets anyone tracking this topic should read "
+        "regardless of which side of any dispute they favor. Do NOT include party/side-"
+        "specific or state-aligned outlets here even if named in the text — those are "
+        "handled separately. Do NOT include a company's own blog, newsroom, or press-"
+        "release page (e.g. 'OpenAI Blog', 'Anthropic Blog', a company's official "
+        "Twitter/X) even if it's a leading voice on the topic — those are promotional "
+        "primary sources, not independent news coverage, and are excluded everywhere else "
+        "in this system for the same reason. Use the outlet's real name only (e.g. "
+        "'Archaeology Magazine', not a URL). Empty list if the text named no clear "
+        "general-purpose independent outlets."
     ),
 )
 

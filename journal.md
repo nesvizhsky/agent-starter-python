@@ -1146,3 +1146,24 @@ framing, not a bug with a clean fix. Verified the original false-positive
 guards (AI Trends, Environmental News, worldwide Archaeology) still
 correctly stay empty across repeated runs — the fix didn't reopen the
 over-eager attribution problem it was layered on top of.
+
+## 2026-06-25 00:20 — Caught company blogs leaking into default_outlets during rollout
+
+Applying the default_outlets backfill topic-by-topic (per user request, not
+all at once) caught a real bug live: an "Artificial Intelligence" topic got
+`default_outlets = ['OpenAI Blog', 'Anthropic Blog', 'Google DeepMind
+Research', ...]` — company blogs, which the rest of the system explicitly
+excludes (`_SOURCE_EXCLUSIONS`: "Do not cite: company press releases or
+blogs"). The `_guidance_extractor`'s instructions said "GENERAL-PURPOSE
+outlets... specialist publications, major wire services" but never
+explicitly forbade a company's own blog/newsroom — easy to miss since a
+company blog can legitimately be "the leading voice" on its own product
+without being independent news coverage.
+
+Fixed by explicitly naming the exclusion in the extractor's prompt (company
+blog/newsroom/press-release pages, even leading voices on the topic, are
+promotional primary sources, not independent coverage). Verified 3x against
+the exact topic that triggered it: 0/3 company blogs after the fix (MIT
+Technology Review, Reuters, IEEE Spectrum, Ars Technica, AP, FT — all
+legitimate). Re-ran the backfill for that one topic to correct the
+already-applied bad data before continuing the rest of the rollout.
