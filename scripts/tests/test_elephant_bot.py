@@ -5,7 +5,7 @@ uv run pytest scripts/tests/test_elephant_bot.py
 
 from __future__ import annotations
 
-from elephant.bot import _split_sources
+from elephant.bot import _filter_valid_sources, _is_bare_platform_domain, _split_sources
 
 
 def test_split_sources_on_commas() -> None:
@@ -34,3 +34,27 @@ def test_split_sources_preserves_multi_word_names() -> None:
 
 def test_split_sources_strips_and_drops_empties() -> None:
     assert _split_sources(" BBC ,, TASS ,\n\n") == ["BBC", "TASS"]
+
+
+def test_bare_platform_domain_rejected() -> None:
+    assert _is_bare_platform_domain("youtube.com") is True
+    assert _is_bare_platform_domain("https://youtube.com/") is True
+    assert _is_bare_platform_domain("instagram.com") is True
+
+
+def test_specific_channel_on_platform_allowed() -> None:
+    """A specific channel/account IS trackable — only the bare platform isn't."""
+    assert _is_bare_platform_domain("youtube.com/c/SomeNewsChannel") is False
+
+
+def test_normal_outlet_never_flagged_as_bare_platform() -> None:
+    assert _is_bare_platform_domain("BBC") is False
+    assert _is_bare_platform_domain("bbc.com") is False
+
+
+def test_filter_valid_sources_separates_bare_platforms() -> None:
+    valid, rejected = _filter_valid_sources(
+        ["BBC", "youtube.com", "youtube.com/c/SomeChannel", "instagram.com"]
+    )
+    assert valid == ["BBC", "youtube.com/c/SomeChannel"]
+    assert rejected == ["youtube.com", "instagram.com"]

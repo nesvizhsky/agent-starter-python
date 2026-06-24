@@ -18,6 +18,7 @@ from elephant.models import Topic
 from elephant.research import (
     _headline_from_url,
     _is_hub_page,
+    _own_domain,
     _parse,
     _source_from_url,
     gather,
@@ -115,11 +116,11 @@ def test_parse_marks_general_query_articles() -> None:
     assert articles[0].is_general_query is True
 
 
-def test_parse_always_blocks_social_video_platforms_even_for_tracked_sources() -> None:
+def test_parse_blocks_social_video_platforms_with_no_allow_domain() -> None:
     """A user-tracked source's per-outlet query passes no block_domains at all
     (by design — see module docstring), but Perplexity can still cite an
-    embedded YouTube clip alongside the real outlet. That must be blocked
-    unconditionally, not just for the general/side-outlet queries."""
+    embedded YouTube clip alongside the real outlet (e.g. tracking "BBC", which
+    has no domain match — allow_domain=None). That citation must be blocked."""
     result = Research(
         text="prose",
         sources=[
@@ -127,9 +128,43 @@ def test_parse_always_blocks_social_video_platforms_even_for_tracked_sources() -
             Source(url="https://www.youtube.com/watch?v=abc123", title="Embedded clip"),
         ],
     )
-    articles = _parse(result)  # no block_domains passed, simulating a tracked source
+    articles = _parse(result)
     assert len(articles) == 1
     assert articles[0].source == "bbc.com"
+
+
+def test_parse_allows_a_specifically_tracked_channel_on_a_blocked_platform() -> None:
+    """A user who explicitly tracks "youtube.com/c/SomeChannel" should still
+    get results from that channel — allow_domain lets its own domain through,
+    even though it's on the always-blocked list."""
+    result = Research(
+        text="prose",
+        sources=[Source(url="https://www.youtube.com/watch?v=xyz", title="Channel video")],
+    )
+    articles = _parse(result, allow_domain="youtube.com")
+    assert len(articles) == 1
+    assert articles[0].source == "youtube.com"
+
+
+def test_parse_allow_domain_does_not_bypass_other_blocked_platforms() -> None:
+    """Tracking a YouTube channel doesn't license an unrelated citation from a
+    *different* always-blocked platform (e.g. Instagram) slipping through."""
+    result = Research(
+        text="prose",
+        sources=[Source(url="https://www.instagram.com/p/xyz", title="Unrelated post")],
+    )
+    articles = _parse(result, allow_domain="youtube.com")
+    assert len(articles) == 0
+
+
+def test_own_domain_extracts_domain_from_url_like_source() -> None:
+    assert _own_domain("youtube.com/c/SomeNewsChannel") == "youtube.com"
+    assert _own_domain("https://www.instagram.com/someaccount") == "instagram.com"
+
+
+def test_own_domain_returns_none_for_plain_outlet_name() -> None:
+    assert _own_domain("BBC") is None
+    assert _own_domain("TASS") is None
 
 
 def test_is_hub_page_catches_known_shapes() -> None:

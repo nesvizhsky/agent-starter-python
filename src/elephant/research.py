@@ -220,10 +220,15 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
     source_instr = topic.source_guidance or _GENERAL_QUERY_INSTRUCTIONS
     today = datetime.now(UTC).strftime("%B %d, %Y")
     recency = _recency_filter(lookback_hours)
-    # User-tracked sources bypass domain filtering (they chose it deliberately).
+    # User-tracked sources bypass domain filtering (they chose it deliberately) —
+    # is_user_tracked=True lets a specifically-tracked channel on an
+    # otherwise-always-blocked platform (e.g. youtube.com/c/SomeChannel) through.
     # Auto-suggested side outlets get the same quality bar as the general query.
     coros = [
-        _query_source(query_subject, src, lookback, today, recency, since=since) for src in active
+        _query_source(
+            query_subject, src, lookback, today, recency, since=since, is_user_tracked=True
+        )
+        for src in active
     ]
     coros += [
         _query_source(
@@ -303,6 +308,23 @@ def _source_label(source: str) -> str:
     return source.strip()
 
 
+def _own_domain(source: str) -> str | None:
+    """Extract a domain from a tracked source string if it looks like one
+    (e.g. "youtube.com/c/SomeChannel" -> "youtube.com"). Returns None for a
+    plain outlet name like "BBC" that isn't itself a URL/domain — used so a
+    user-tracked channel on an otherwise-always-blocked platform (YouTube,
+    Instagram, ...) can still be queried, while an unrelated citation from
+    that same platform tacked onto a different source's query stays blocked.
+    """
+    candidate = _source_label(source)
+    without_scheme = candidate.removeprefix("https://").removeprefix("http://")
+    if "." not in without_scheme.split("/")[0]:
+        return None
+    if not candidate.startswith(("http://", "https://")):
+        candidate = f"https://{candidate}"
+    return _source_from_url(candidate)
+
+
 async def _query_source(
     topic_name: str,
     source: str,
@@ -311,8 +333,14 @@ async def _query_source(
     recency: str = "week",
     block_domains: frozenset[str] | None = None,
     since: datetime | None = None,
+    is_user_tracked: bool = False,
 ) -> list[Article]:
     outlet = _source_label(source)
+    # Only a source the user explicitly added (not an auto-suggested side
+    # outlet) can bypass _ALWAYS_BLOCKED_DOMAINS, and only for its own domain —
+    # e.g. tracking "youtube.com/c/SomeNewsChannel" should work, but that
+    # never licenses an unrelated YouTube citation on a different source's query.
+    allow_domain = _own_domain(source) if is_user_tracked else None
 
     # Try fetching directly from the outlet's own site first (real sitemap/RSS —
     # see fetch.py) — only falls through to the Perplexity recall-based query below
@@ -342,7 +370,7 @@ async def _query_source(
     except Exception:
         logger.exception("_research() call failed for source {!r}", source)
         return []
-    articles = _parse(result, block_domains=block_domains)
+    articles = _parse(result, block_domains=block_domains, allow_domain=allow_domain)
     logger.debug(
         "source {!r} → {} articles: {}", source, len(articles), [a.headline[:60] for a in articles]
     )
@@ -552,6 +580,7 @@ def _parse(
     result: Research,
     block_domains: frozenset[str] | None = None,
     is_general_query: bool = False,
+    allow_domain: str | None = None,
 ) -> list[Article]:
     """Turn a Research result into Article objects.
 
@@ -564,17 +593,23 @@ def _parse(
     context = the full Perplexity answer prose, attached to every article from
     this query so perspectives.py has real content to write about.
     block_domains: if set, URLs from these domains are silently skipped, in
-    addition to _ALWAYS_BLOCKED_DOMAINS (social/video platforms), which apply
-    unconditionally — even to a query for a source the user explicitly tracks.
+    addition to _ALWAYS_BLOCKED_DOMAINS (social/video platforms). The latter
+    apply even to a query for a source the user explicitly tracks — UNLESS
+    allow_domain matches, which is set to that source's own domain when the
+    user specifically tracks a channel/account on one of those platforms
+    (e.g. "youtube.com/c/SomeNewsChannel") — a citation from a *different*
+    always-blocked domain Perplexity tacked on (e.g. an unrelated YouTube
+    video while researching "BBC") is still blocked either way.
     """
     articles = []
     for src in result.sources:
         if not src.url:
             continue
         domain = _source_from_url(src.url)
-        if any(domain.endswith(d) for d in _ALWAYS_BLOCKED_DOMAINS) or (
-            block_domains and any(domain.endswith(d) for d in block_domains)
-        ):
+        is_always_blocked = domain != allow_domain and any(
+            domain.endswith(d) for d in _ALWAYS_BLOCKED_DOMAINS
+        )
+        if is_always_blocked or (block_domains and any(domain.endswith(d) for d in block_domains)):
             logger.debug("blocked domain: {}", domain)
             continue
         headline = src.title or _headline_from_url(src.url)

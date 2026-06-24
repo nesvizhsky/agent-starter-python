@@ -768,3 +768,37 @@ and fixed:
 Added 45 new `_UI` keys (118 total, up from 73). Verified all translate
 correctly to Russian with placeholders intact via a direct `_ensure_ui()`
 check before restarting the dev bot.
+
+## 2026-06-24 17:20 — Refined the YouTube block: allow specific tracked channels
+
+User pushed back on the earlier "always block social/video platforms"
+fix: a user should be able to track a *specific* YouTube channel or
+Instagram account as a source — the block should only stop an unrelated
+platform citation Perplexity tacks onto a *different* source's query, and
+bare platform domains ("youtube.com" with no channel) shouldn't be
+addable as a source at all, since there's no such thing as "all of
+YouTube" as one trackable source.
+
+research.py: `_parse()` gained `allow_domain` — `_ALWAYS_BLOCKED_DOMAINS`
+still blocks unconditionally *unless* the cited domain matches
+`allow_domain`, which `_query_source()` only computes (via new
+`_own_domain()`) when `is_user_tracked=True` — set in `gather()` only for
+the user's own `active` sources list, never for auto-suggested side
+outlets or the general query. So tracking "youtube.com/c/SomeChannel"
+works, but an unrelated YouTube citation while researching "BBC" still
+gets blocked, and side outlets/general search can never bypass the block
+at all.
+
+bot.py: added `_is_bare_platform_domain()` + `_filter_valid_sources()`,
+wired into all 3 places sources get added (the /add_topic sources step,
+`/add_source`, and the inline "add source" flow from the sources view).
+Caught a second real bug while doing this: the inline flow's domain
+parser did `.split("/")[0]`, silently collapsing any channel path down to
+the bare domain before the new validation could even see it — fixed to
+keep the path intact.
+
+Caught a bug in my own `_own_domain()` via its own test: it checked
+"does this look like a domain" using the string BEFORE stripping the
+`https://` scheme, so `https://www.instagram.com/someaccount` split on
+"/" gave "https:" as the first segment (no dot) and wrongly returned
+None. Fixed by stripping the scheme first.

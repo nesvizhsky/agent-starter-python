@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import json
 import re
+from urllib.parse import urlparse
 
 from loguru import logger
 from pydantic_ai import Agent
@@ -276,6 +277,7 @@ _UI: dict[str, str] = {
     "rename_inline_confirm": "✓ *{old}* renamed to *{new}*.",
     "block_added_confirm": "✓ *{domain}* will be ignored for *{name}*.",
     "default_help": "Use commands to interact:\n/add\\_topic · /topics · /check · /pause · /resume",  # noqa: E501
+    "bare_platform_rejected": "Skipped {sources} — that's just the platform, not a specific channel/page. Use a full link instead, e.g. youtube.com/c/SomeChannel.",  # noqa: E501
 }
 
 # Two-level cache: {lang: {key: translated_string}}
@@ -1092,6 +1094,30 @@ def _split_sources(raw: str) -> list[str]:
     return [s.strip() for s in _SOURCE_SEPARATORS.split(raw.strip()) if s.strip()]
 
 
+def _is_bare_platform_domain(source: str) -> bool:
+    """True if *source* is just a social/video platform's bare domain with no
+    specific account/channel path — e.g. "youtube.com" or "https://instagram.com/"
+    — which can't be tracked as one specific source. "youtube.com/c/SomeChannel"
+    is fine and is allowed through research.py's domain bypass for tracked sources.
+    """
+    candidate = source.strip()
+    if not candidate.startswith(("http://", "https://")):
+        candidate = f"https://{candidate}"
+    parsed = urlparse(candidate)
+    domain = parsed.netloc.removeprefix("www.").lower()
+    path = parsed.path.strip("/")
+    return domain in research._ALWAYS_BLOCKED_DOMAINS and not path
+
+
+def _filter_valid_sources(sources: list[str]) -> tuple[list[str], list[str]]:
+    """Split sources into (valid, rejected) — rejected ones are bare platform
+    domains with no specific channel/account, which can't be meaningfully
+    tracked (there's no such thing as "all of YouTube" as a news source)."""
+    valid = [s for s in sources if not _is_bare_platform_domain(s)]
+    rejected = [s for s in sources if _is_bare_platform_domain(s)]
+    return valid, rejected
+
+
 async def _ask_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     tg = update.effective_user
     lang = await _lang(tg.id) if tg else "English"
@@ -1105,8 +1131,15 @@ async def _ask_sources(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def _got_sources_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None or not update.message.text:
         return _AT_SOURCES
+    tg = update.effective_user
     sources = _split_sources(update.message.text)
-    return await _create_topic(update, context, sources)
+    valid, rejected = _filter_valid_sources(sources)
+    if rejected and tg is not None:
+        lang = await _lang(tg.id)
+        await update.message.reply_text(
+            _t(lang, "bare_platform_rejected", sources=", ".join(rejected))
+        )
+    return await _create_topic(update, context, valid)
 
 
 async def _got_sources_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2096,6 +2129,9 @@ async def cmd_add_source(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     *name_parts, source = context.args
     name = " ".join(name_parts)
+    if _is_bare_platform_domain(source):
+        await update.message.reply_text(_t(lang, "bare_platform_rejected", sources=source))
+        return
     topic = await store.get_topic_by_name(tg.id, name)
     if topic is None:
         await update.message.reply_text(
@@ -2222,7 +2258,13 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         topic_id = UUID(ud.pop("awaiting_source_id"))
         topic_name = ud.pop("awaiting_source_name", "")
-        domain = text.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0]
+        # Keep any path (e.g. "youtube.com/c/SomeChannel") instead of collapsing
+        # to the bare domain — a specific channel/account is trackable even on
+        # an otherwise-always-blocked platform, but the bare platform isn't.
+        domain = text.strip().lower().removeprefix("https://").removeprefix("http://").rstrip("/")
+        if _is_bare_platform_domain(domain):
+            await update.message.reply_text(_t(ul, "bare_platform_rejected", sources=domain))
+            return
         topic = await store.get_topic(update.effective_user.id, topic_id)  # type: ignore[union-attr]
         if topic is None:
             await update.message.reply_text(_t(ul, "topic_nf"))
