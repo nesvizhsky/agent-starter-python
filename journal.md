@@ -919,3 +919,27 @@ found one real fresh article and sent a normal digest; running it again
 immediately (now correctly deduped) sent "По этой теме новых событий для
 репортажа не обнаружено." — confirmed via a stub Bot that only prints,
 not the real Telegram API, so no live message was sent to the user.
+
+## 2026-06-24 19:20 — Found the actual cause of the "Check" tap delay
+
+User asked directly: why is there a delay between tapping "Check" and
+seeing the running notification? Checked production logs for timing
+evidence rather than guessing: `_ensure_ui()` (UI translation) runs as the
+very first await in `on_topic_panel`'s "check" branch — `_lang()` is
+called before the "fetching" status message can even be built, since that
+message's text itself goes through `_t()`. If the in-memory `_ui_cache`
+is cold (every deploy/restart clears it — and I've deployed many times
+today), the FIRST command after that restart pays for the full batched
+LLM translation (~3-4s) before the user sees anything at all. Production
+logs showed exactly this: `_ensure_ui` → "UI translated to Russian" →
+digest pipeline starting 3 seconds later, all within one request.
+
+Fixed at the root: added `store.get_distinct_languages()` and warm the
+cache for every language any existing user has set in `_post_init()`,
+which runs once at startup before the bot serves any traffic. Verified
+against the real production DB: warms both stored languages (English —
+already pre-cached at module load, no LLM call needed — and Russian) in
+~3.5s total, entirely during deploy, never during a user's request.
+Confirmed the same in dev: the "UI translated to Russian" log line now
+appears right after "starting elephant bot", before any command is
+possible.

@@ -2383,6 +2383,13 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _post_init(app: Application) -> None:  # type: ignore[type-arg]
     await store.apply_migrations()
+    # Pre-warm the UI translation cache for every language any existing user
+    # has set, so the FIRST command after this deploy/restart doesn't pay for
+    # a live multi-second LLM translation before it can respond — confirmed
+    # in production logs: a cold _ensure_ui() call was the dominant cause of
+    # "why is there a delay before the fetching message even shows up?".
+    languages = await store.get_distinct_languages()
+    await asyncio.gather(*(_ensure_ui(lang) for lang in languages))
     await app.bot.delete_my_commands()
     _cmds_en = [
         BotCommand("start", "Main menu"),

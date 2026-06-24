@@ -142,6 +142,14 @@ async def set_user_language(telegram_id: int, language: str) -> None:
     )
 
 
+async def get_distinct_languages() -> list[str]:
+    """All languages any existing user has set — used to pre-warm the UI
+    translation cache at startup instead of paying for it lazily on whichever
+    user's first action happens to land after a deploy/restart."""
+    rows = await db.fetch("SELECT DISTINCT language FROM elephant_users")
+    return [str(r["language"]) for r in rows]
+
+
 async def get_user_timezone(telegram_id: int) -> str:
     row = await db.fetchrow(
         "SELECT timezone FROM elephant_users WHERE telegram_id = $1",
