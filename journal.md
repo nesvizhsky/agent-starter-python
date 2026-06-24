@@ -1070,3 +1070,38 @@ demonstrated harm without the recall trade-off of excluding all undated
 articles, decided against the broader "exclude undated by default" policy
 change for now — the residual bucket no longer skews toward real dateable
 news.
+
+## 2026-06-24 23:05 — Topics with no tracked sources only ever got AI-search recall
+
+User pushed back on the framing that adding sources is the user's job: "these
+sources are very easy to find... the research tool should be capable of
+doing that." Right call — the architecture already half-solved this for
+topics WITH sides (auto-identified side outlets get directly queried via the
+same sitemap-first mechanism as user-tracked sources, no user action needed)
+but never extended that to general topics without sides. For those,
+`generate_source_guidance()` already finds real, specific outlet names via a
+grounded search — but the result was only ever used as a prose hint fed to
+the general AI search, never as a list of sources to query directly.
+Verified the gap concretely: archaeology.org and archaeologymag.com both
+have rich sitemaps (9 and 29 real recent articles respectively, read
+directly) that the general query's AI-search recall was missing almost
+entirely.
+
+Built `SourceGuidance` (research.py): `generate_source_guidance()` now
+returns both the prose `instructions` (unchanged) and a structured
+`outlets: list[str]` — 3-5 general-purpose outlets extracted from the SAME
+grounded research, explicitly excluding party/side-specific ones (those stay
+identify_sides()'s job, so the two don't double-count the same outlets).
+Added `Topic.default_outlets` (migration 012, plain `text[]` like
+`sources`), wired into `gather()` exactly like `side_outlets` — queried via
+`_query_source()` (sitemap/RSS-first, AI-search fallback), same quality
+blocklist as auto-suggested outlets, deduped against anything the user
+already tracks. Updated both topic-creation and /describe-edit call sites in
+bot.py, and backfill_sides.py to also backfill `default_outlets` for
+existing topics (same dry-run/backup pattern as sides/guidance).
+
+Verified end-to-end with a direct gather() call using the real archaeology
+topic's generated outlets (Journal of Archaeological Research, Antiquity,
+Archaeology, ScienceDaily): 35 articles gathered vs. ~8-10 from the general
+query alone — confirming the comprehensiveness gap is closed without any
+user action required.

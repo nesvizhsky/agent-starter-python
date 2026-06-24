@@ -285,5 +285,8 @@ async def test_generate_source_guidance_names_real_outlets() -> None:
         "governance developments",
         "AI safety",
     )
-    assert guidance.startswith("Prioritise:")
-    assert "YouTube" in guidance  # from _SOURCE_EXCLUSIONS, always appended
+    assert guidance.instructions.startswith("Prioritise:")
+    assert "YouTube" in guidance.instructions  # from _SOURCE_EXCLUSIONS, always appended
+    assert len(guidance.outlets) <= 4
+    for outlet in guidance.outlets:
+        assert outlet.strip()

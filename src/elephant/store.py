@@ -32,6 +32,7 @@ _UPDATABLE_TOPIC_FIELDS = frozenset(
         "trusted_sources",
         "feedback_notes",
         "source_guidance",
+        "default_outlets",
         "sides_json",
     }
 )
@@ -240,14 +241,15 @@ async def create_topic(
     sources: list[str],
     description: str | None = None,
     source_guidance: str | None = None,
+    default_outlets: list[str] | None = None,
     sides_json: str | None = None,
 ) -> Topic:
     row = await db.fetchrow(
         """
         INSERT INTO elephant_topics
             (telegram_id, name, description, timezone, sources,
-             source_guidance, sides_json)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+             source_guidance, default_outlets, sides_json)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
         """,
         telegram_id,
@@ -256,6 +258,7 @@ async def create_topic(
         timezone,
         sources,
         source_guidance,
+        default_outlets or [],
         sides_json,
     )
     topic = _topic(row)  # type: ignore[arg-type]

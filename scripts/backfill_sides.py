@@ -51,6 +51,7 @@ async def main(apply: bool, topic_filter: str | None) -> None:
     for topic in topics:
         old_sides = [s.name for s in topic.sides]
         old_guidance = topic.source_guidance
+        old_outlets = topic.default_outlets
 
         new_sides = await research.identify_sides(topic.description or topic.name, topic.name)
         new_guidance = await research.generate_source_guidance(
@@ -62,7 +63,8 @@ async def main(apply: bool, topic_filter: str | None) -> None:
         for s in new_sides:
             print(f"    {s.name}: {s.outlets}")
         print(f"  guidance: {(old_guidance or '')[:80]!r}")
-        print(f"         -> {new_guidance[:80]!r}")
+        print(f"         -> {new_guidance.instructions[:80]!r}")
+        print(f"  default_outlets: {old_outlets!r} -> {new_guidance.outlets!r}")
         print()
 
         backups.append(
@@ -71,6 +73,7 @@ async def main(apply: bool, topic_filter: str | None) -> None:
                 "name": topic.name,
                 "old_sides_json": topic.sides_json,
                 "old_source_guidance": old_guidance,
+                "old_default_outlets": old_outlets,
             }
         )
 
@@ -78,7 +81,8 @@ async def main(apply: bool, topic_filter: str | None) -> None:
             await store.update_topic(
                 topic.id,
                 sides_json=json.dumps([s.model_dump() for s in new_sides]),
-                source_guidance=new_guidance,
+                source_guidance=new_guidance.instructions,
+                default_outlets=new_guidance.outlets,
             )
 
     if apply:

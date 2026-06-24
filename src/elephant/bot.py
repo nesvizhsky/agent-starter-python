@@ -617,7 +617,8 @@ async def _got_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     context.user_data["new_topic_name"] = name
     context.user_data["new_topic_desc"] = expanded
-    context.user_data["new_topic_source_guidance"] = guidance
+    context.user_data["new_topic_source_guidance"] = guidance.instructions if guidance else None
+    context.user_data["new_topic_default_outlets"] = guidance.outlets if guidance else []
     context.user_data["new_topic_sides_json"] = json.dumps([s.model_dump() for s in sides])
 
     await update.message.reply_text(
@@ -1246,6 +1247,7 @@ async def _create_topic(
     name = ud.pop("new_topic_name", "")
     desc = ud.pop("new_topic_desc", None)
     source_guidance = ud.pop("new_topic_source_guidance", None)
+    default_outlets = ud.pop("new_topic_default_outlets", [])
     sides_json = ud.pop("new_topic_sides_json", None)
     slots: list[Slot] = ud.pop("new_topic_slots", [])
     tz = ud.pop("new_topic_tz", "UTC")
@@ -1259,6 +1261,7 @@ async def _create_topic(
         slots=slots,
         timezone=tz,
         source_guidance=source_guidance,
+        default_outlets=default_outlets,
         sides_json=sides_json,
     )
     label = _sched_label_for_slots(slots, tz, lang)
@@ -1287,6 +1290,7 @@ _TOPIC_FLOW_KEYS = (
     "new_topic_name",
     "new_topic_desc",
     "new_topic_source_guidance",
+    "new_topic_default_outlets",
     "new_topic_sides_json",
     "new_topic_freq",
     "new_topic_dow",
@@ -2327,7 +2331,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         sides = results[2] if not isinstance(results[2], BaseException) else None
         await store.update_topic(topic_id, description=expanded)
         if guidance:
-            await store.update_topic(topic_id, source_guidance=guidance)
+            await store.update_topic(
+                topic_id, source_guidance=guidance.instructions, default_outlets=guidance.outlets
+            )
         if sides is not None:
             await store.update_topic(
                 topic_id, sides_json=json.dumps([s.model_dump() for s in sides])

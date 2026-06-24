@@ -59,6 +59,7 @@ class Topic(BaseModel):
     trusted_sources: list[str]
     feedback_notes: str | None
     source_guidance: str | None
+    default_outlets: list[str] = Field(default_factory=list)  # auto-identified, directly fetched
     sides_json: str | None = None  # JSON-encoded list[Side]; use the `sides` property
     created_at: datetime
     last_sent_at: datetime | None  # most recent send across all slots; display only

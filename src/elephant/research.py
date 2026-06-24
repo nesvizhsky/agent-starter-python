@@ -27,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
 from agent.services.llm import Research, build_model
@@ -246,6 +246,14 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
                 side_outlets.append(outlet)
                 already_tracked.add(outlet.lower())
 
+    # Default outlets: auto-identified general-purpose outlets for topics with
+    # no user-added sources (or to supplement a thin list) — queried the same
+    # way as a tracked source (sitemap/RSS direct fetch first), so a topic the
+    # user never added sources to still gets comprehensive coverage instead of
+    # relying solely on the general query's AI-search recall.
+    default_outlets = [o for o in topic.default_outlets if o.lower() not in already_tracked]
+    already_tracked.update(o.lower() for o in default_outlets)
+
     # Use description as the research query when set — it's the user's detailed focus.
     # Fall back to name so the short label still produces sensible results.
     query_subject = topic.description or topic.name
@@ -272,7 +280,7 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
             block_domains=_BLOCKED_GENERAL_DOMAINS,
             since=since,
         )
-        for src in side_outlets
+        for src in side_outlets + default_outlets
     ]
     general_subject = await _to_english(query_subject)
     coros.append(_query_general(general_subject, lookback, today, source_instr, recency))
@@ -281,7 +289,7 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
 
     articles: list[Article] = []
     seen: set[str] = set()
-    source_labels = active + side_outlets + ["general"]
+    source_labels = active + side_outlets + default_outlets + ["general"]
     dropped = 0
 
     for label, result in zip(source_labels, raw, strict=True):
@@ -305,12 +313,13 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
     await attach_published_dates(articles)
 
     logger.info(
-        "gathered {} articles for topic {!r} ({} tracked + {} side-outlet sources + general, "
-        "{} roundups dropped)",
+        "gathered {} articles for topic {!r} ({} tracked + {} side-outlet + {} default-outlet "
+        "sources + general, {} roundups dropped)",
         len(articles),
         topic.name,
         len(active),
         len(side_outlets),
+        len(default_outlets),
         dropped,
     )
     return articles
@@ -450,22 +459,41 @@ _guidance_research_prompt = (
     "PubMed, IAEA, WHO). Name specific outlets."
 )
 
-_guidance_extractor: Agent[None, str] = Agent(
+
+class SourceGuidance(BaseModel):
+    instructions: str
+    # 3-5 general-purpose outlets (not party/side-specific — identify_sides()
+    # covers those separately) gather() queries directly via the same
+    # sitemap/RSS-first mechanism as user-tracked sources, so a topic with no
+    # user-added sources still gets comprehensive coverage from a few real,
+    # relevant outlets instead of relying only on the general AI search's
+    # recall.
+    outlets: list[str] = Field(default_factory=list)
+
+
+_guidance_extractor: Agent[None, SourceGuidance] = Agent(
     build_model("fast"),
-    output_type=str,
+    output_type=SourceGuidance,
     system_prompt=(
-        "Extract source guidance for a news research bot from the research text below. "
-        "Write 2-4 sentences naming the most relevant outlets to prioritise, using ONLY "
-        "outlets actually named in the text — never invent one that isn't mentioned. "
+        "Extract source guidance for a news research bot from the research text below.\n\n"
+        "instructions: 2-4 sentences naming the most relevant outlets to prioritise, using "
+        "ONLY outlets actually named in the text — never invent one that isn't mentioned. "
         "If the research named outlets for concrete, named adversarial parties (not just a "
         "spectrum of editorial opinions), include every party's outlets symmetrically — "
-        "never omit a party's side. "
-        "Start directly with 'Prioritise:' — no preamble."
+        "never omit a party's side. Start directly with 'Prioritise:' — no preamble.\n\n"
+        "outlets: separately, list 3-5 of the single most authoritative GENERAL-PURPOSE "
+        "outlets named in the text (specialist publications, major wire services) — outlets "
+        "anyone tracking this topic should read regardless of which side of any dispute they "
+        "favor. Do NOT include party/side-specific or state-aligned outlets here even if "
+        "named in the text — those are handled separately. Use the outlet's real name only "
+        "(e.g. 'Archaeology Magazine', not a URL). Empty list if the text named no clear "
+        "general-purpose outlets."
     ),
 )
 
 
 _MAX_OUTLETS_PER_SIDE = 3
+_MAX_DEFAULT_OUTLETS = 4
 
 
 class _SidesOutput(BaseModel):
@@ -570,12 +598,13 @@ async def identify_sides(description: str, topic_name: str) -> list[Side]:
     return []
 
 
-async def generate_source_guidance(description: str, topic_name: str) -> str:
+async def generate_source_guidance(description: str, topic_name: str) -> SourceGuidance:
     """Generate topic-specific source guidance, grounded in a real web search rather
     than the model's unverified background knowledge.
 
-    Falls back to the generic instructions if either call fails.
+    Falls back to the generic instructions (and no default outlets) if either call fails.
     """
+    fallback = SourceGuidance(instructions=_GENERAL_QUERY_INSTRUCTIONS, outlets=[])
     query = _guidance_research_prompt.format(
         topic_name=topic_name, description=description or topic_name
     )
@@ -583,15 +612,17 @@ async def generate_source_guidance(description: str, topic_name: str) -> str:
         grounded = await _research(query)
     except Exception:  # noqa: BLE001
         logger.warning("source guidance research failed for {!r} — using defaults", topic_name)
-        return _GENERAL_QUERY_INSTRUCTIONS
+        return fallback
     try:
         result = await _guidance_extractor.run(f"Topic: {topic_name}\n\nResearch:\n{grounded.text}")
-        guidance = result.output.strip()
+        guidance = result.output
         # Always append the quality exclusions so guidance stays consistent.
-        return f"{guidance} {_SOURCE_EXCLUSIONS}"
+        instructions = f"{guidance.instructions.strip()} {_SOURCE_EXCLUSIONS}"
+        outlets = guidance.outlets[:_MAX_DEFAULT_OUTLETS]
+        return SourceGuidance(instructions=instructions, outlets=outlets)
     except Exception:  # noqa: BLE001
         logger.warning("source guidance extraction failed for {!r} — using defaults", topic_name)
-        return _GENERAL_QUERY_INSTRUCTIONS
+        return fallback
 
 
 async def _query_general(
