@@ -58,6 +58,18 @@ async def main(apply: bool, topic_filter: str | None) -> None:
             topic.description or topic.name, topic.name
         )
 
+        # identify_sides() is a live, non-deterministic grounded call — it has
+        # known flakiness on conflict topics that DO have real sides (confirmed
+        # with Belarus Politics earlier: re-running a known-good topic 3x can
+        # occasionally come back empty even though it's correct the other two
+        # times). Never let an empty result silently erase sides that were
+        # previously found — that's much more likely a flaky miss than a
+        # genuine "this topic has no sides after all".
+        sides_suspect = old_sides and not new_sides
+        if sides_suspect:
+            print(f"  ⚠ sides came back empty but were previously {old_sides!r}")
+            print("    SKIPPING sides_json overwrite (likely flaky) — keeping existing value")
+
         print(f"=== {topic.name} ===")
         print(f"  sides:    {old_sides!r} -> {[s.name for s in new_sides]!r}")
         for s in new_sides:
@@ -78,12 +90,13 @@ async def main(apply: bool, topic_filter: str | None) -> None:
         )
 
         if apply:
-            await store.update_topic(
-                topic.id,
-                sides_json=json.dumps([s.model_dump() for s in new_sides]),
-                source_guidance=new_guidance.instructions,
-                default_outlets=new_guidance.outlets,
-            )
+            update_fields: dict[str, object] = {
+                "source_guidance": new_guidance.instructions,
+                "default_outlets": new_guidance.outlets,
+            }
+            if not sides_suspect:
+                update_fields["sides_json"] = json.dumps([s.model_dump() for s in new_sides])
+            await store.update_topic(topic.id, **update_fields)
 
     if apply:
         _BACKUP_DIR.mkdir(exist_ok=True)
