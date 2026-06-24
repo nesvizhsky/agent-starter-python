@@ -701,3 +701,24 @@ Two fixes:
    call; if it's still running after 60s, sends a "still working, hang
    tight" message before continuing to await it. Wired into all 3 call
    sites (cmd_check, the topic-picker check, the topic-panel check).
+
+## 2026-06-24 16:40 — YouTube leaked through despite an existing blocklist
+
+User: "youtube sources keep appearing." `_BLOCKED_GENERAL_DOMAINS` already
+existed and already included youtube.com — but research.py's own module
+docstring documents a deliberate policy: "User-configured sources bypass
+all domain filtering — if you added a source, the bot queries it
+regardless." The bypass was meant to mean "don't apply our quality bar to
+an outlet you explicitly picked," but the implementation applied it to
+*any* domain Perplexity happened to cite while researching that source —
+including an embedded YouTube clip cited alongside the real outlet, which
+the user obviously never asked for.
+
+Split the blocklist into two tiers: `_ALWAYS_BLOCKED_DOMAINS` (pure social/
+video platforms — YouTube, Instagram, TikTok, X, Facebook, Reddit) now
+applies unconditionally in `_parse()`, even for user-tracked source
+queries; `_BLOCKED_GENERAL_DOMAINS` (the quality-journalism bar — marketing
+blogs, listicle aggregators, encyclopedias) still only applies to
+general/auto-suggested-side-outlet queries, preserving the original intent
+of the bypass. Verified with a synthetic BBC+YouTube citation pair and
+added a regression test.

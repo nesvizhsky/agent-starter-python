@@ -62,9 +62,13 @@ def _recency_filter(hours: int) -> str:
     return "month"
 
 
-# Domains excluded from the *general* query results only.
-# User-configured sources are never filtered this way.
-_BLOCKED_GENERAL_DOMAINS: frozenset[str] = frozenset(
+# Pure social/video platforms — never a real news citation, even when Perplexity
+# tacks one onto a query for a source the user explicitly chose to track (e.g. a
+# news article's embedded YouTube clip cited alongside the actual outlet). Applied
+# to EVERY query, including user-tracked sources — unlike _BLOCKED_GENERAL_DOMAINS
+# below, "you chose this source" was never meant to mean "accept any domain
+# Perplexity happens to cite while researching it."
+_ALWAYS_BLOCKED_DOMAINS: frozenset[str] = frozenset(
     {
         "youtube.com",
         "youtu.be",
@@ -75,6 +79,14 @@ _BLOCKED_GENERAL_DOMAINS: frozenset[str] = frozenset(
         "tiktok.com",
         "reddit.com",
         "threads.net",
+    }
+)
+
+# Domains excluded from the *general* and auto-suggested-side-outlet query results
+# only. User-configured sources are never filtered by THIS set — only by
+# _ALWAYS_BLOCKED_DOMAINS above.
+_BLOCKED_GENERAL_DOMAINS: frozenset[str] = frozenset(
+    {
         "marketingprofs.com",
         "buildfastwithai.com",
         "promptailearning.com",
@@ -551,14 +563,18 @@ def _parse(
     summary = headline (used for embedding-based dedup).
     context = the full Perplexity answer prose, attached to every article from
     this query so perspectives.py has real content to write about.
-    block_domains: if set, URLs from these domains are silently skipped.
+    block_domains: if set, URLs from these domains are silently skipped, in
+    addition to _ALWAYS_BLOCKED_DOMAINS (social/video platforms), which apply
+    unconditionally — even to a query for a source the user explicitly tracks.
     """
     articles = []
     for src in result.sources:
         if not src.url:
             continue
         domain = _source_from_url(src.url)
-        if block_domains and any(domain.endswith(d) for d in block_domains):
+        if any(domain.endswith(d) for d in _ALWAYS_BLOCKED_DOMAINS) or (
+            block_domains and any(domain.endswith(d) for d in block_domains)
+        ):
             logger.debug("blocked domain: {}", domain)
             continue
         headline = src.title or _headline_from_url(src.url)

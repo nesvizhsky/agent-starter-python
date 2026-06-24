@@ -115,6 +115,23 @@ def test_parse_marks_general_query_articles() -> None:
     assert articles[0].is_general_query is True
 
 
+def test_parse_always_blocks_social_video_platforms_even_for_tracked_sources() -> None:
+    """A user-tracked source's per-outlet query passes no block_domains at all
+    (by design — see module docstring), but Perplexity can still cite an
+    embedded YouTube clip alongside the real outlet. That must be blocked
+    unconditionally, not just for the general/side-outlet queries."""
+    result = Research(
+        text="prose",
+        sources=[
+            Source(url="https://www.bbc.com/news/article-1", title="Real BBC article"),
+            Source(url="https://www.youtube.com/watch?v=abc123", title="Embedded clip"),
+        ],
+    )
+    articles = _parse(result)  # no block_domains passed, simulating a tracked source
+    assert len(articles) == 1
+    assert articles[0].source == "bbc.com"
+
+
 def test_is_hub_page_catches_known_shapes() -> None:
     hub_headlines = [
         "Ancient Civilizations News",
