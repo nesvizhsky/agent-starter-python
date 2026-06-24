@@ -1366,6 +1366,11 @@ async def on_topic_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _safe_answer(query)
         return
     _, action, topic_id_str = parts
+    # rm_src/rm_blk append a 4th segment ("tp:rm_src:{topic_id}:{index}"), which
+    # the split above leaves attached to topic_id_str as "{topic_id}:{index}" —
+    # strip it here so UUID(topic_id_str) below doesn't blow up. Those two
+    # actions re-derive the index themselves from the raw query.data further down.
+    topic_id_str = topic_id_str.split(":", 1)[0]
 
     await _safe_answer(query, "Running digest…" if action == "check" else "")
 

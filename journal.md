@@ -646,3 +646,31 @@ that would produce byte-identical content (e.g. a double-tap). Added
 `_safe_edit_text()` — catches specifically that error message text (not a
 blanket `except BadRequest`, since that would also hide real bugs like
 unescaped-Markdown parse errors) and bulk-replaced all 40 call sites.
+
+## 2026-06-24 15:55 — Two more real bugs caught live-testing in the dev bot
+
+User reported `/add_topic` "got stuck" — sent a Russian description, no reply
+at all, no error logged. Reproduced the exact same LLM/research calls
+standalone and they completed in ~12s, so the backend itself wasn't the
+problem. Restarted the dev bot process and had the user retry the identical
+input — it worked the second time (topic created, digest pipeline started).
+Read as a one-off hang in that specific long-running process (possibly a
+stuck connection in the cached OpenRouter client) rather than a code bug —
+noted, not chased further since it didn't reproduce after restart.
+
+The restart did surface a second, real, reproducible bug though: clicking
+"✖ {source}" or "🚫 {source}" on a topic's sources view crashed with
+`ValueError: badly formed hexadecimal UUID string`. Root cause: those two
+buttons encode 4 colon-separated parts (`tp:rm_src:{topic_id}:{index}`), but
+`on_topic_panel`'s top-level parser splits on only the first 2 colons,
+leaving `topic_id_str = "{topic_id}:{index}"` — not a valid UUID — and
+`UUID(topic_id_str)` blew up before the function ever reached the rm_src/
+rm_blk branches further down (which already correctly re-derive the index
+from the raw `query.data` themselves). Fixed by stripping anything after the
+first colon from `topic_id_str` right after the initial split.
+
+Also fixed a real (if separate) gap: PTB logged "No JobQueue set up... 
+Ignoring conversation_timeout" on every startup — the `[job-queue]` extra
+was never installed, so abandoned /add_topic conversations were never
+cleaned up after the configured 10-minute timeout. Added
+`python-telegram-bot[job-queue]` to pyproject.toml.
