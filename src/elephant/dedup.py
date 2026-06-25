@@ -13,6 +13,7 @@ persist them via store.record_seen() without re-computing.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -40,6 +41,13 @@ async def filter_seen(
     if not articles:
         return [], []
 
+    # Per-source counts at each stage — added after a real incident where a
+    # whole digest had only one source for a side with multiple tracked
+    # outlets, and the aggregate "N -> M" log line alone couldn't tell us
+    # whether a specific outlet's articles never arrived (gather()'s problem)
+    # or arrived and got deduped away (this module's problem).
+    in_counts = Counter(a.source for a in articles)
+
     # ------------------------------------------------------------------
     # Pass 1 — URL match (free, one query)
     # ------------------------------------------------------------------
@@ -54,6 +62,7 @@ async def filter_seen(
 
     if not after_date:
         logger.info("dedup: all {} articles already seen (URL pass)", len(articles))
+        _log_per_source(in_counts, Counter(), Counter())
         return [], []
 
     # ------------------------------------------------------------------
@@ -92,4 +101,24 @@ async def filter_seen(
         len(after_date),
         len(fresh),
     )
+    _log_per_source(
+        in_counts, Counter(a.source for a in after_date), Counter(a.source for a in fresh)
+    )
     return fresh, fresh_embeddings
+
+
+def _log_per_source(
+    in_counts: Counter[str], after_date_counts: Counter[str], fresh_counts: Counter[str]
+) -> None:
+    """One line per source showing in -> after URL/date pass -> after semantic
+    pass, so a source that arrived with plenty of articles but ended up with
+    zero in the final digest can be told apart from a source gather() never
+    found anything for in the first place."""
+    for source in sorted(in_counts):
+        logger.info(
+            "dedup per-source {!r}: {} in -> {} after URL/date -> {} after semantic",
+            source,
+            in_counts[source],
+            after_date_counts.get(source, 0),
+            fresh_counts.get(source, 0),
+        )

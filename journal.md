@@ -1167,3 +1167,22 @@ the exact topic that triggered it: 0/3 company blogs after the fix (MIT
 Technology Review, Reuters, IEEE Spectrum, Ars Technica, AP, FT — all
 legitimate). Re-ran the backfill for that one topic to correct the
 already-applied bad data before continuing the rest of the rollout.
+
+## 2026-06-25 16:45 — Added per-source dedup logging after a one-Russian-source digest
+
+User: a Ukraine War digest had only RT as the Russian-side source, when
+TASS/RIA Novosti are also tracked. Traced the exact scheduled run in
+production logs: TASS's sitemap returned "0 candidates, 0 relevant" at that
+specific moment (a transient feed hiccup — a re-run minutes later got 70+),
+which explains TASS cleanly. RIA Novosti found 27 relevant candidates via
+sitemap that same run, but none reached the final digest — and there was no
+way to tell, after the fact, whether they were filtered by dedup
+(plausible: this topic is checked daily, so most RIA Novosti citations are
+likely already-seen) or lost somewhere else, since the existing dedup log
+line only reports an aggregate "N -> M", not broken down by source.
+
+Added a per-source breakdown to dedup.filter_seen(): for every source that
+contributed at least one article, logs in-count -> after URL/date pass ->
+after semantic pass. Next time a source goes mysteriously quiet in a
+digest, this will show definitively whether gather() found nothing for it,
+or dedup correctly removed everything it found as already-seen.
