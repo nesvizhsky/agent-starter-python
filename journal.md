@@ -1186,3 +1186,66 @@ contributed at least one article, logs in-count -> after URL/date pass ->
 after semantic pass. Next time a source goes mysteriously quiet in a
 digest, this will show definitively whether gather() found nothing for it,
 or dedup correctly removed everything it found as already-seen.
+
+## 2026-06-25 17:30 — Added two doublecheck steps; checked OpenRouter for free/cheap models first
+
+User asked to survey free/very-cheap OpenRouter models for doublecheck
+steps, plus specifically wanted a way to catch cases where the main search
+collectively missed something important. Checked OpenRouter's actual
+model list + free-tier policy (20 req/min, 1000/day with $10+ credits
+purchased — this project already pays, so that tier applies) before
+picking anything.
+
+**Coverage check** (research.gather()): added `_check_coverage()` — after
+the normal concurrent gather completes, one more research() call presents
+everything already found and asks specifically what's NOT in that list,
+rather than searching blind again. Each concurrent per-source/general query
+only sees its own slice; this is the one point that looks at the combined
+result and asks a search engine to find the gap. Sequential by necessity
+(needs the headline list first) — one extra research() call per digest,
+same cost class as the general query. Verified live: found 11 genuinely
+new articles for a Russia-Ukraine topic that the main gather had missed.
+Factored the roundup/hub/dedup filtering shared by every batch into
+`_filter_batch()` so the coverage check's results go through the exact same
+quality bar as everything else, and `seen` carries across both calls.
+
+**Outlet-affiliation check** (research.identify_sides()): this was the
+one suited to a free/cheap CHAT model rather than search, since it's a
+bounded factual judgment ("is X really Y's outlet"), not a live-search
+task. Tried `meta-llama/llama-3.3-70b-instruct:free` first — hit a 429
+from the upstream free-tier provider (Venice) on first call, a known risk
+of `:free` slugs being oversubscribed. Switched to `deepseek/deepseek-chat`
+(also free) — ran without errors, but was UNRELIABLE on the actual
+judgment: across repeated tests it consistently flagged the correct, less-
+internationally-famous outlets (BelTA, Suspilne, Ukrinform) as mismatches
+while missing the real planted errors (Press TV, ITAR) about half the
+time. Tried the existing "fast" tier too (not free, but already trusted
+elsewhere) — same failure pattern, 6/6 wrong. Recognized this as the exact
+same lesson identify_sides() itself already taught: plausible-sounding
+judgment from background knowledge alone isn't trustworthy for real-world
+facts about lesser-known regional outlets, regardless of model size —
+needs to be grounded in a real search. Rebuilt as the same 2-step pattern
+used everywhere else in this file: one research() call verifying every
+(outlet, party) pair via real search, then a cheap "fast"-tier extraction
+pass reading the now-factual prose (extraction is the easy part; finding
+the facts wasn't). Verified 3/3 correct on the exact two production
+misattributions (Press TV under Belarus, ITAR under Ukraine) with zero
+false positives on a clean set.
+
+**Caught and fixed a real regression while testing**: the Belarus
+multi-aspect fix from earlier today turned out to have a blast radius bug
+— testing "Russia-Ukraine war" (an unambiguous, simple state-vs-state war)
+through `identify_sides()` returned empty, because the research step
+literally reasoned "this doesn't pass the [Belarus-style] internal power
+struggle test" and answered NO, even though the topic obviously qualifies
+on the FIRST, simpler criterion (a war between two named states) that
+needs no such test at all. The "decision test" added for Belarus had
+absorbed the whole prompt's authority instead of being scoped to its one
+intended sub-case. Fixed by explicitly stating a single direct dispute
+qualifies straight from the main question with no further test, and
+that the multi-aspect test is for deciding whether a *multi-aspect
+domestic* topic still has one dispute at its core — never grounds to
+reject an already-obvious state-vs-state war. Verified 3x: Russia-Ukraine
+war now correctly gets sides every time, Belarus still works, AI Trends
+still correctly stays empty — the fix didn't cost back what the Belarus
+fix gained.

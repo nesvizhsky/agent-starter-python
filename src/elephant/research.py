@@ -296,19 +296,9 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
         if isinstance(result, BaseException):
             logger.warning("research failed for {!r}: {}", label, result)
             continue
-        for article in result:
-            if article.url in seen:
-                continue
-            if _ROUNDUP_RE.search(article.headline):
-                logger.info("dropped roundup/listicle: {!r}", article.headline)
-                dropped += 1
-                continue
-            if _is_hub_page(article.headline):
-                logger.info("dropped hub/reference page: {!r}", article.headline)
-                dropped += 1
-                continue
-            seen.add(article.url)
-            articles.append(article)
+        kept, batch_dropped = _filter_batch(result, seen)
+        articles.extend(kept)
+        dropped += batch_dropped
 
     await attach_published_dates(articles)
 
@@ -322,7 +312,97 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
         len(default_outlets),
         dropped,
     )
+
+    # Coverage check: a single extra question asking specifically what's NOT
+    # already in the list above. Each concurrent query above only sees its own
+    # slice (one outlet, or one broad catch-all phrasing) — this is the one
+    # point in the pipeline that looks at everything actually found so far and
+    # asks a search engine to find the gap, rather than just searching blind
+    # again. Sequential (needs the headline list first), so it always costs
+    # one extra research() call per digest — same cost class as the general
+    # query, run once, not per-source.
+    coverage_raw = await _check_coverage(
+        topic.name, general_subject, articles, lookback, today, recency
+    )
+    new_from_coverage, coverage_dropped = _filter_batch(coverage_raw, seen)
+    if new_from_coverage:
+        await attach_published_dates(new_from_coverage)
+        articles.extend(new_from_coverage)
+        logger.info(
+            "coverage check found {} article(s) for {!r} the main gather missed "
+            "({} dropped as roundup/hub)",
+            len(new_from_coverage),
+            topic.name,
+            coverage_dropped,
+        )
+
     return articles
+
+
+def _filter_batch(raw_articles: list[Article], seen: set[str]) -> tuple[list[Article], int]:
+    """Apply the roundup/hub-page/duplicate-URL filters shared by every batch
+    of raw search results. Mutates *seen* in place so repeated calls (the main
+    gather, then the coverage check) dedupe against each other too."""
+    kept: list[Article] = []
+    dropped = 0
+    for article in raw_articles:
+        if article.url in seen:
+            continue
+        if _ROUNDUP_RE.search(article.headline):
+            logger.info("dropped roundup/listicle: {!r}", article.headline)
+            dropped += 1
+            continue
+        if _is_hub_page(article.headline):
+            logger.info("dropped hub/reference page: {!r}", article.headline)
+            dropped += 1
+            continue
+        seen.add(article.url)
+        kept.append(article)
+    return kept, dropped
+
+
+_coverage_check_prompt = (
+    "I already found these {n} events/articles about {topic_name!r} ({description}) "
+    "from the last {lookback}:\n\n{headlines}\n\n"
+    "Search for any OTHER major, specific event, decision, or development about this "
+    "exact topic from the same period that is NOT already covered by the list above. "
+    "Only report something if it is a genuinely DIFFERENT event — do not just rephrase "
+    "or re-cite something already listed, and do not report generic background or "
+    "ongoing-situation commentary. If you find nothing missing, say so plainly and "
+    "name nothing. If you do find something, name the specific event and cite the "
+    "real source."
+)
+
+
+async def _check_coverage(
+    topic_name: str,
+    description: str,
+    articles: list[Article],
+    lookback: str,
+    today: str,
+    recency: str,
+) -> list[Article]:
+    """Cross-check the articles already gathered against one more fresh search
+    that's explicitly asked what's missing, rather than searching blind again.
+    Catches real gaps the concurrent per-source/general queries collectively
+    missed. Returns [] (fails open, never blocks the digest) on any error —
+    this is a quality improvement, not a required step."""
+    if not articles:
+        return []
+    headlines = "\n".join(f"- {a.headline} ({a.source})" for a in articles[:40])
+    query = f"Today is {today}. " + _coverage_check_prompt.format(
+        topic_name=topic_name,
+        description=description or topic_name,
+        n=len(articles),
+        lookback=lookback,
+        headlines=headlines,
+    )
+    try:
+        result = await _research(query, search_recency_filter=recency)
+    except Exception:  # noqa: BLE001
+        logger.warning("coverage check failed for {!r}", topic_name)
+        return []
+    return _parse(result, block_domains=_BLOCKED_GENERAL_DOMAINS, is_general_query=True)
 
 
 def _cutoff_date(lookback: str) -> str:
@@ -526,33 +606,38 @@ _sides_research_prompt = (
     "per party that are specifically state-aligned, party-aligned, or otherwise formally "
     "affiliated with that party's position — not just outlets that happen to share a "
     "general editorial leaning on the subject.\n\n"
-    "DECISION TEST: ask whether there is ONE country/organization whose internal power "
-    "struggle — current leadership/government vs. a named rival faction or opposition "
-    "movement — is the THREAD running through every aspect the topic mentions. If yes, "
-    "every other aspect listed (elections, protests, sanctions, foreign relations, economic "
-    "impact) is a CONSEQUENCE of that same power struggle, not an unrelated topic, even "
-    "though it also involves other countries. A government facing sanctions, contested "
-    "elections, and street protests over the SAME power struggle is one story with sides —"
-    " do not be talked out of this just because sanctions/foreign relations technically "
-    "involve other countries too; ask whether they exist BECAUSE OF the domestic power "
-    "struggle (then: same dispute, has sides) or are unrelated to it (then: judge that "
-    "aspect separately). Worked example: 'Belarus: political and economic developments, "
+    "A topic with ONE simple, direct, central dispute (e.g. a war between two named "
+    "states, a government vs. a named opposition with no other framing) qualifies "
+    "directly from the question above — no further test needed, just identify the "
+    "parties and answer YES.\n\n"
+    "MULTI-ASPECT TEST (only relevant when the topic lists SEVERAL aspects, like "
+    "elections + protests + sanctions + foreign relations, and it's unclear whether "
+    "that makes it 'too broad'): ask whether there is ONE country/organization whose "
+    "internal power struggle — current leadership/government vs. a named rival "
+    "faction or opposition movement — is the THREAD running through every aspect "
+    "listed. If yes, every other aspect is a CONSEQUENCE of that same power struggle, "
+    "not an unrelated topic, even though it also involves other countries (e.g. "
+    "Western sanctions imposed BECAUSE OF a domestic crackdown are still part of the "
+    "same dispute). Worked example: 'Belarus: political and economic developments, "
     "including elections, protests, sanctions, and relations with Russia and Western "
     "countries' passes this test — every aspect listed is a consequence of the SAME "
-    "Lukashenko-government-vs-opposition power struggle (contested elections, the "
-    "resulting protests, the resulting Western sanctions). This SHOULD get sides "
-    "(Government of Belarus vs. the named opposition movement).\n\n"
+    "Lukashenko-government-vs-opposition power struggle. This SHOULD get sides "
+    "(Government of Belarus vs. the named opposition movement). This test is for "
+    "deciding whether a multi-aspect DOMESTIC topic still has one dispute at its "
+    "core — it does NOT apply to, and must never be used to reject, a direct "
+    "state-vs-state war or other single, already-named dispute; those qualify from "
+    "the main question above regardless of how many aspects (military operations, "
+    "diplomacy, sanctions, humanitarian impact) the topic also mentions.\n\n"
     "Answer NO and name NO sides only if: the topic is broad, general, or worldwide in scope "
     "and only some narrow regional or topical slice of it touches a conflict (e.g. 'archaeology "
     "news worldwide' should NOT get sides just because some archaeological sites sit in "
     "conflict zones — that's a tangential intersection, not what the topic is about); OR "
-    "the topic's several aspects fail the decision test above — they are genuinely "
-    "independent of each other with no single power struggle connecting them (e.g. 'AI "
-    "trends' covers model releases, regulation, and applications — these are separate "
-    "subjects with no shared adversarial dispute, each with its own spectrum of editorial "
-    "opinions) — a spectrum of editorial opinions or ideological leanings, by itself, is "
-    "NOT the same thing as a conflict's sides, even if real outlets exist at every point "
-    "on that spectrum."
+    "the topic's several aspects are genuinely independent of each other with no single "
+    "dispute or power struggle connecting them (e.g. 'AI trends' covers model releases, "
+    "regulation, and applications — these are separate subjects with no shared adversarial "
+    "dispute, each with its own spectrum of editorial opinions) — a spectrum of editorial "
+    "opinions or ideological leanings, by itself, is NOT the same thing as a conflict's "
+    "sides, even if real outlets exist at every point on that spectrum."
 )
 
 _sides_extractor: Agent[None, _SidesOutput] = Agent(
@@ -594,6 +679,73 @@ _sides_extractor: Agent[None, _SidesOutput] = Agent(
 )
 
 
+# Doublecheck for outlet/party misattribution — confirmed real in production
+# twice: "ITAR" (a Russian state agency) attributed to Ukraine's side, and
+# "Press TV" (Iranian) attributed to Belarus's government side. Tried a free
+# chat model first (no search, just background knowledge) — unreliable: it
+# consistently flagged the CORRECT, less-internationally-famous outlets
+# (BelTA, Suspilne) while missing the actual planted errors, in both a 70B
+# free model and the existing "fast" tier. Same lesson as identify_sides()
+# itself: a plausible-sounding judgment from background knowledge alone isn't
+# trustworthy for this kind of fact, regardless of model size — it needs to
+# be grounded in a real search. One research() call covers every pair in the
+# topic at once, then a cheap extraction pass reads the (now factual) prose —
+# extracting from stated facts is the easy part; finding the facts wasn't.
+async def verify_side_outlets(sides: list[Side]) -> list[Side]:
+    """Remove any outlet a search-grounded doublecheck finds is not actually
+    affiliated with its stated party. Fails open (returns *sides* unchanged)
+    on any error — this is a quality improvement, not a required step."""
+    pairs = [(outlet, side.name) for side in sides for outlet in side.outlets]
+    if not pairs:
+        return sides
+    listing = "\n".join(f"{i + 1}. outlet={o!r}, party={p!r}" for i, (o, p) in enumerate(pairs))
+    query = (
+        "For each numbered (outlet, party) pair below, search to verify whether the "
+        "outlet is genuinely affiliated with, state-owned by, or based in that "
+        "party/country. List which pair numbers are a MISMATCH (the outlet is NOT "
+        "actually affiliated with that party), with a one-sentence reason for each. "
+        "If none are mismatches, say so plainly.\n\n" + listing
+    )
+    try:
+        grounded = await _research(query)
+        result = await _outlet_check_extractor.run(
+            f"Pairs checked:\n{listing}\n\nResearch:\n{grounded.text}"
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("outlet affiliation check failed — keeping all outlets unchanged")
+        return sides
+    bad_indices = {i - 1 for i in result.output.mismatch_indices}
+    if not bad_indices:
+        return sides
+    bad_pairs = {pairs[i] for i in bad_indices if 0 <= i < len(pairs)}
+    cleaned: list[Side] = []
+    for side in sides:
+        kept = [o for o in side.outlets if (o, side.name) not in bad_pairs]
+        removed = [o for o in side.outlets if o not in kept]
+        if removed:
+            logger.info(
+                "outlet check: removed {} from {!r} (affiliation mismatch)", removed, side.name
+            )
+        cleaned.append(Side(name=side.name, outlets=kept))
+    return cleaned
+
+
+class _OutletCheckOutput(BaseModel):
+    mismatch_indices: list[int] = Field(default_factory=list)
+
+
+_outlet_check_extractor: Agent[None, _OutletCheckOutput] = Agent(
+    build_model("fast"),
+    output_type=_OutletCheckOutput,
+    system_prompt=(
+        "Extract which numbered pairs the research below identified as a MISMATCH "
+        "(outlet not actually affiliated with the stated party). Return ONLY the "
+        "numbers explicitly identified as mismatches in the research text — never "
+        "infer one yourself. Empty list if the research found no mismatches."
+    ),
+)
+
+
 _SIDES_RESEARCH_ATTEMPTS = 3
 
 
@@ -629,7 +781,7 @@ async def identify_sides(description: str, topic_name: str) -> list[Side]:
         try:
             result = await _sides_extractor.run(prompt)
             if result.output.sides:
-                return result.output.sides
+                return await verify_side_outlets(result.output.sides)
         except Exception:  # noqa: BLE001
             logger.warning("side extraction attempt {} failed for {!r}", attempt + 1, topic_name)
     return []

@@ -14,8 +14,9 @@ from uuid import uuid4
 import pytest
 
 from agent.services.llm import Research, Source
-from elephant.models import Topic
+from elephant.models import Article, Side, Topic
 from elephant.research import (
+    _filter_batch,
     _headline_from_url,
     _is_hub_page,
     _own_domain,
@@ -25,6 +26,7 @@ from elephant.research import (
     gather,
     generate_source_guidance,
     identify_sides,
+    verify_side_outlets,
 )
 
 # ---------------------------------------------------------------------------
@@ -175,6 +177,40 @@ async def test_to_english_skips_llm_call_for_ascii_text() -> None:
     assert await _to_english(text) == text
 
 
+def _article(url: str, headline: str, source: str = "example.com") -> Article:
+    return Article(url=url, headline=headline, source=source, published_at=None, summary=headline)
+
+
+def test_filter_batch_drops_duplicate_urls_across_calls() -> None:
+    """seen is mutated in place so a second batch (e.g. the coverage check)
+    correctly dedupes against the first batch's URLs, not just within itself."""
+    seen: set[str] = set()
+    first, _ = _filter_batch([_article("https://a.com/1", "Real headline here")], seen)
+    second, _ = _filter_batch(
+        [
+            _article("https://a.com/1", "Real headline here"),
+            _article("https://a.com/2", "Another real headline"),
+        ],
+        seen,
+    )
+    assert len(first) == 1
+    assert [a.url for a in second] == ["https://a.com/2"]
+
+
+def test_filter_batch_drops_roundups_and_hub_pages() -> None:
+    seen: set[str] = set()
+    kept, dropped = _filter_batch(
+        [
+            _article("https://a.com/1", "Top 10 AI stories this week"),
+            _article("https://a.com/2", "Archaeology News"),
+            _article("https://a.com/3", "Russia fires missiles at Kyiv, killing 3"),
+        ],
+        seen,
+    )
+    assert [a.url for a in kept] == ["https://a.com/3"]
+    assert dropped == 2
+
+
 def test_is_hub_page_catches_known_shapes() -> None:
     hub_headlines = [
         "Ancient Civilizations News",
@@ -290,3 +326,36 @@ async def test_generate_source_guidance_names_real_outlets() -> None:
     assert len(guidance.outlets) <= 4
     for outlet in guidance.outlets:
         assert outlet.strip()
+
+
+async def test_verify_side_outlets_empty_sides_returns_empty() -> None:
+    assert await verify_side_outlets([]) == []
+
+
+async def test_verify_side_outlets_no_outlets_returns_unchanged() -> None:
+    sides = [Side(name="Russia", outlets=[]), Side(name="Ukraine", outlets=[])]
+    assert await verify_side_outlets(sides) == sides
+
+
+@pytest.mark.integration
+async def test_verify_side_outlets_catches_real_misattribution() -> None:
+    """Regression: production twice misattributed an outlet to the wrong
+    country/party ("ITAR" — a Russian agency — under Ukraine; "Press TV" —
+    Iranian — under Belarus's government). A free chat model (no search)
+    was unreliable for this exact judgment, consistently flagging the
+    correct, less-famous outlets instead — this must be grounded in a real
+    search to be trustworthy, same lesson as identify_sides() itself."""
+    sides = [
+        Side(
+            name="Government of Belarus",
+            outlets=["Belarusian Telegraph Agency (BelTA)", "Press TV", "Narodnyaya Gazeta"],
+        ),
+        Side(name="Ukraine", outlets=["Suspilne", "ITAR", "Kyiv Independent"]),
+    ]
+    cleaned = await verify_side_outlets(sides)
+    belarus = next(s for s in cleaned if s.name == "Government of Belarus")
+    ukraine = next(s for s in cleaned if s.name == "Ukraine")
+    assert "Press TV" not in belarus.outlets
+    assert "Belarusian Telegraph Agency (BelTA)" in belarus.outlets
+    assert "ITAR" not in ukraine.outlets
+    assert "Suspilne" in ukraine.outlets
