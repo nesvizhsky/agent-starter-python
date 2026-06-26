@@ -778,9 +778,14 @@ async def identify_sides(description: str, topic_name: str) -> list[Side]:
     extraction step (the old behavior) can't fix this, since extraction is just reading
     whatever the research call already concluded.
     """
+    # Translate to English before asking Perplexity — a non-English description
+    # biases the search toward sources in that language regardless of the prompt's
+    # language-neutrality instructions. Translating removes the bias at the source.
+    english_desc = await _to_english(description or topic_name)
+    english_name = await _to_english(topic_name) if topic_name else ""
     for attempt in range(_SIDES_RESEARCH_ATTEMPTS):
         query = _sides_research_prompt.format(
-            topic_name=topic_name, description=description or topic_name
+            topic_name=english_name, description=english_desc
         )
         try:
             grounded = await _research(query)
@@ -804,8 +809,12 @@ async def generate_source_guidance(description: str, topic_name: str) -> SourceG
     Falls back to the generic instructions (and no default outlets) if either call fails.
     """
     fallback = SourceGuidance(instructions=_GENERAL_QUERY_INSTRUCTIONS, outlets=[])
+    # Translate to English so Perplexity searches for the best outlets internationally,
+    # not just in the language the user described the topic in.
+    english_desc = await _to_english(description or topic_name)
+    english_name = await _to_english(topic_name) if topic_name else ""
     query = _guidance_research_prompt.format(
-        topic_name=topic_name, description=description or topic_name
+        topic_name=english_name, description=english_desc
     )
     try:
         grounded = await _research(query)
