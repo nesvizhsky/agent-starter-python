@@ -284,12 +284,20 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
     ]
     general_subject = await _to_english(query_subject)
     coros.append(_query_general(general_subject, lookback, today, source_instr, recency))
+    # For non-English topics, also run a native-language general query so regional
+    # stories (e.g. a Russian-language report of a local excavation) aren't lost
+    # when the English translation shifts Perplexity's search toward international sources.
+    has_native_query = general_subject != query_subject
+    if has_native_query:
+        coros.append(_query_general(query_subject, lookback, today, source_instr, recency))
 
     raw = await asyncio.gather(*coros, return_exceptions=True)
 
     articles: list[Article] = []
     seen: set[str] = set()
     source_labels = active + side_outlets + default_outlets + ["general"]
+    if has_native_query:
+        source_labels = source_labels + ["general_native"]
     dropped = 0
 
     for label, result in zip(source_labels, raw, strict=True):
@@ -302,14 +310,16 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
 
     await attach_published_dates(articles)
 
+    general_label = "general + general_native" if has_native_query else "general"
     logger.info(
         "gathered {} articles for topic {!r} ({} tracked + {} side-outlet + {} default-outlet "
-        "sources + general, {} roundups dropped)",
+        "sources + {}, {} roundups dropped)",
         len(articles),
         topic.name,
         len(active),
         len(side_outlets),
         len(default_outlets),
+        general_label,
         dropped,
     )
 
