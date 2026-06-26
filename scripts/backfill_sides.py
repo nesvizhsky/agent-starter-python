@@ -16,12 +16,18 @@ to a timestamped JSON file before writing, so this is reversible.
     uv run python scripts/backfill_sides.py              # dry run, all topics
     uv run python scripts/backfill_sides.py --apply       # actually update, all topics
     uv run python scripts/backfill_sides.py --topic "Belarus Politics" --apply  # one topic only
+    uv run python scripts/backfill_sides.py --non-english-only --apply  # only non-ASCII topics
 
 --topic is useful for re-running a single topic that landed on a flaky result —
 identify_sides()/generate_source_guidance() call live, search-grounded models,
 so re-running the same topic can legitimately produce a different result each
 time (confirmed: rerunning a known-good conflict topic 3x can occasionally
 return an empty/worse result on one try even though it's correct the other two).
+
+--non-english-only limits the run to topics whose name or description contains
+non-ASCII characters — i.e. topics created in a non-English language whose
+source guidance and sides were previously generated from a non-English Perplexity
+query, biasing them toward sources in that language.
 """
 
 from __future__ import annotations
@@ -29,22 +35,35 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
 from elephant import research, store
 
+_NON_ASCII_RE = re.compile(r"[^\x00-\x7F]")
+
+
+def _is_non_english(topic: object) -> bool:
+    from elephant.models import Topic
+    t: Topic = topic  # type: ignore[assignment]
+    return bool(_NON_ASCII_RE.search(t.name) or _NON_ASCII_RE.search(t.description or ""))
+
 _BACKUP_DIR = Path(__file__).parent / "backfill_backups"
 
 
-async def main(apply: bool, topic_filter: str | None) -> None:
+async def main(apply: bool, topic_filter: str | None, non_english_only: bool) -> None:
     topics = await store.get_all_active_topics()
     if topic_filter:
         topics = [t for t in topics if t.name == topic_filter]
         if not topics:
             print(f"No active topic named {topic_filter!r} found.")
             return
-    print(f"{len(topics)} active topic(s) found.\n")
+    if non_english_only:
+        topics = [t for t in topics if _is_non_english(t)]
+        print(f"Filtered to {len(topics)} non-English topic(s).\n")
+    else:
+        print(f"{len(topics)} active topic(s) found.\n")
 
     backups: list[dict[str, object]] = []
 
@@ -112,5 +131,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Actually write changes to the DB")
     parser.add_argument("--topic", default=None, help="Only process the topic with this exact name")
+    parser.add_argument(
+        "--non-english-only",
+        action="store_true",
+        help="Only process topics with non-ASCII name or description",
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.apply, args.topic))
+    asyncio.run(main(args.apply, args.topic, args.non_english_only))

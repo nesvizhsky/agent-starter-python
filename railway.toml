@@ -1,4 +1,5 @@
 # Deploy config for Eat the Elephant.
-# `fastapi run` reads the PORT env var Railway injects; no --port needed.
+# Both services (eat-the-elephant and elephant-cron-tick) build from the same
+# Dockerfile. The startup script dispatches to the right command per service.
 [deploy]
-startCommand = "fastapi run src/elephant/app.py"
+startCommand = "bash scripts/railway_start.sh"
