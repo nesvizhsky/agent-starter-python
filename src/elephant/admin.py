@@ -888,8 +888,6 @@ async def settings_page(
     role = await _get_role(elephant_admin)
     if role is None:
         return RedirectResponse("/admin/login", status_code=303)
-    if role != "full":
-        return Response("Admin access required", status_code=403)
 
     s = get_settings()
     ro_active = await store.get_admin_setting(_RO_SETTINGS_KEY) is not None

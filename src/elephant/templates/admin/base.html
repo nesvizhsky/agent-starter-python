@@ -48,11 +48,9 @@
         <a href="/admin/logs" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-800 {% if active == 'logs' %}bg-gray-800 text-white{% else %}text-gray-400{% endif %}">
           📋 Logs
         </a>
-        {% if not is_readonly %}
         <a href="/admin/settings" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-800 {% if active == 'settings' %}bg-gray-800 text-white{% else %}text-gray-400{% endif %}">
           🔑 Access
         </a>
-        {% endif %}
       </div>
     </nav>
     <div class="p-3 border-t border-gray-800">

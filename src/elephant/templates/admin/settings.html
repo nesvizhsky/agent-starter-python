@@ -8,9 +8,10 @@
 
   <h1 class="text-2xl font-bold text-white">Access Settings</h1>
 
+  {% if not is_readonly %}
   {% if saved %}
   <div class="bg-green-950 border border-green-800 text-green-300 text-sm px-4 py-2 rounded-lg">
-    ✓ Read-only password updated. Share it with whoever needs view-only access.
+    ✓ Read-only credentials updated. Share them with whoever needs view-only access.
   </div>
   {% endif %}
 
@@ -25,6 +26,7 @@
     ✗ The read-only username cannot be the same as the full admin username (<code class="font-mono">{{ full_username }}</code>). Choose a different one.
   </div>
   {% endif %}
+  {% endif %}
 
   <!-- Read-only admin section -->
   <div class="bg-gray-900 border border-gray-800 rounded-xl divide-y divide-gray-800">
@@ -34,7 +36,7 @@
         <div>
           <h2 class="text-sm font-semibold text-gray-200">Read-only admin</h2>
           <p class="text-xs text-gray-500 mt-0.5">
-            A second password that grants view-only access — can see everything, cannot change anything.
+            A second account with view-only access — can see everything, cannot change anything.
           </p>
         </div>
         <div class="shrink-0 ml-4">
@@ -47,6 +49,19 @@
       </div>
     </div>
 
+    {% if is_readonly %}
+    <!-- Read-only view: show current username, no form -->
+    <div class="px-6 py-4">
+      <div class="text-xs text-gray-500 mb-1">Username</div>
+      <div class="text-sm text-white font-mono">{{ ro_username or '—' }}</div>
+    </div>
+    <div class="px-6 py-4">
+      <div class="text-xs text-gray-500 mb-1">Password</div>
+      <div class="text-sm text-gray-600">••••••••</div>
+    </div>
+
+    {% else %}
+    <!-- Full admin: edit form -->
     <div class="px-6 py-5 space-y-4">
       <p class="text-xs text-gray-500">
         Set a username and password for the read-only admin. They log in at
@@ -84,7 +99,7 @@
     <div class="px-6 py-4 flex items-center justify-between">
       <div>
         <p class="text-xs text-gray-400 font-semibold">Revoke access</p>
-        <p class="text-xs text-gray-600 mt-0.5">Removes the read-only password. Any active read-only sessions will be logged out immediately.</p>
+        <p class="text-xs text-gray-600 mt-0.5">Removes the read-only account. Any active sessions will be logged out immediately.</p>
       </div>
       <form method="post" action="/admin/settings/ro-revoke">
         <button type="submit"
@@ -95,22 +110,29 @@
       </form>
     </div>
     {% endif %}
+    {% endif %}
 
   </div>
 
-  <!-- Full admin credentials info -->
-  <div class="bg-gray-900 border border-gray-800 rounded-xl px-6 py-4 space-y-2">
-    <h2 class="text-sm font-semibold text-gray-200">Your admin credentials</h2>
-    <div class="flex gap-6 text-xs">
-      <div>
-        <span class="text-gray-500">Username: </span>
-        <code class="text-gray-300">{{ full_username }}</code>
-      </div>
+  <!-- Full admin credentials -->
+  <div class="bg-gray-900 border border-gray-800 rounded-xl divide-y divide-gray-800">
+    <div class="px-6 py-4">
+      <h2 class="text-sm font-semibold text-gray-200">Full admin</h2>
     </div>
-    <p class="text-xs text-gray-500">
-      Username set via <code class="text-gray-400">ADMIN_USERNAME</code> env var (default: <code class="text-gray-400">admin</code>).
-      Password set via <code class="text-gray-400">ADMIN_PASSWORD</code>. Change either in Railway → Variables.
-    </p>
+    <div class="px-6 py-4">
+      <div class="text-xs text-gray-500 mb-1">Username</div>
+      <div class="text-sm text-white font-mono">{{ full_username }}</div>
+    </div>
+    <div class="px-6 py-4">
+      <div class="text-xs text-gray-500 mb-1">Password</div>
+      {% if is_readonly %}
+      <div class="text-sm text-gray-600">••••••••</div>
+      {% else %}
+      <div class="text-sm text-gray-600">••••••••
+        <span class="text-xs text-gray-600 ml-2">— set via <code class="text-gray-500">ADMIN_PASSWORD</code> env var (Railway → Variables)</span>
+      </div>
+      {% endif %}
+    </div>
   </div>
 
 </div>
