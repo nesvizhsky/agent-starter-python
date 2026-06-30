@@ -39,6 +39,19 @@ def _story(headline: str, *sources: str) -> Story:
 # ---------------------------------------------------------------------------
 
 
+def test_format_prompt_strict_relevance_filter_when_topic_given() -> None:
+    """When a topic is provided, the prompt must instruct the LLM to reject
+    articles that are merely geographically or thematically adjacent — not just
+    'not directly related'. The filter language drives correctness here."""
+    articles = [_article("https://bbc.com/a", "Some headline", "BBC")]
+    prompt = _format_prompt(articles, topic_name="Ukraine War", topic_description="military events")
+    lower = prompt.lower()
+    # Must include the "would exist without the topic" test
+    assert "if this topic didn't exist" in lower or "topic didn't exist" in lower
+    # Must not use weak language like "tangentially"
+    assert "tangentially" not in lower
+
+
 def test_format_prompt_includes_all_articles() -> None:
     articles = [
         _article("https://bbc.com/a", "Ceasefire talks begin", "BBC"),
@@ -170,3 +183,53 @@ async def test_cluster_solo_articles_each_become_story() -> None:
 
     # All unrelated articles should each become their own story
     assert len(stories) == 3
+
+
+@pytest.mark.integration
+async def test_cluster_rejects_geographically_adjacent_off_topic_articles() -> None:
+    """Articles from the same country/region but NOT about the specific topic
+    must be filtered out by the relevance rule.
+
+    Regression: production digest for 'Война в Украине' included a Russia-Rwanda
+    nuclear deal and EU gas storage — both set in/around Russia/Europe but neither
+    a direct development of the Ukraine war itself.
+    """
+    articles = [
+        _article(
+            "https://bbc.com/ukraine-strike",
+            "Russia fires missiles at Kyiv, killing 3",
+            "BBC",
+        ),
+        _article(
+            "https://tass.ru/kyiv-operation",
+            "Russia conducts precision strike on military targets in Kyiv",
+            "TASS",
+        ),
+        # These two share the same country/region but are NOT about the Ukraine war
+        _article(
+            "https://rt.com/rwanda",
+            "Russia and Rwanda sign nuclear cooperation roadmap",
+            "RT",
+        ),
+        _article(
+            "https://reuters.com/eu-gas",
+            "EU gas storage reaches 80% ahead of winter season",
+            "Reuters",
+        ),
+    ]
+
+    stories = await cluster(
+        articles,
+        topic_name="Война в Украине",
+        topic_description="военные действия и непосредственные последствия для Украины",
+    )
+
+    all_headlines = " ".join(s.headline.lower() for s in stories)
+    # On-topic story must be present
+    ukraine_keywords = {"kyiv", "strike", "missile", "киев", "удар"}
+    assert any(any(kw in s.headline.lower() for kw in ukraine_keywords) for s in stories), (
+        f"Expected Ukraine strike story; got: {[s.headline for s in stories]}"
+    )
+    # Off-topic stories must be absent
+    assert "rwanda" not in all_headlines, f"Rwanda story leaked through filter: {all_headlines}"
+    assert "gas" not in all_headlines, f"EU gas story leaked through filter: {all_headlines}"

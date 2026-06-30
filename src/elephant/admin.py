@@ -289,9 +289,7 @@ async def user_detail(
     if not _authenticated(elephant_admin):
         return RedirectResponse("/admin/login", status_code=303)
 
-    user_row = await db.fetchrow(
-        "SELECT * FROM elephant_users WHERE telegram_id = $1", telegram_id
-    )
+    user_row = await db.fetchrow("SELECT * FROM elephant_users WHERE telegram_id = $1", telegram_id)
     if not user_row:
         return Response("User not found", status_code=404)
 

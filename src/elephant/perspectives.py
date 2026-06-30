@@ -33,7 +33,12 @@ _agent: Agent[None, _Output] = Agent(
     system_prompt=(
         "You are a news editor grouping articles by the real-world event they describe.\n\n"
         "Rules:\n"
-        "1. Only include articles directly about the stated topic. Discard anything else.\n"
+        "1. Relevance filter — strict: every article must be DIRECTLY about the stated topic "
+        "as its primary subject, not merely set in the same country, region, or general theme. "
+        "Before including an article, ask: 'Would this specific event exist and be newsworthy "
+        "if this topic didn't exist?' If yes, discard it. Same geography ≠ same topic. "
+        "Same broad theme ≠ same topic. The event must be a direct development in or "
+        "consequence of the specific topic focus — not just adjacent to it.\n"
         "2. Two articles cover the SAME event if they describe the same occurrence "
         "(attack, decision, discovery) regardless of framing. BBC 'Russia fires missiles at Kyiv' "
         "and TASS 'Russia conducts precision strike on military targets in Kyiv' = SAME event.\n"
@@ -255,8 +260,10 @@ def _format_prompt(articles: list[Article], topic_name: str, topic_description: 
         if topic_description and topic_description != topic_name:
             lines.append(f"TOPIC FOCUS: {topic_description}\n")
         lines.append(
-            "Only include articles directly about this topic and focus. "
-            "Discard anything that is only tangentially or indirectly related.\n"
+            "Filter strictly: each article's primary subject must be a direct development "
+            "in or consequence of this specific topic. Sharing the same country, region, or "
+            "general theme is not enough — discard any article whose event would exist and "
+            "be newsworthy even if this topic didn't exist.\n"
         )
 
     # Include unique research contexts (one per source query) so the agent has

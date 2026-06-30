@@ -46,8 +46,10 @@ _NON_ASCII_RE = re.compile(r"[^\x00-\x7F]")
 
 def _is_non_english(topic: object) -> bool:
     from elephant.models import Topic
+
     t: Topic = topic  # type: ignore[assignment]
     return bool(_NON_ASCII_RE.search(t.name) or _NON_ASCII_RE.search(t.description or ""))
+
 
 _BACKUP_DIR = Path(__file__).parent / "backfill_backups"
 

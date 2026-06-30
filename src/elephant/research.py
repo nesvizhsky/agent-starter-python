@@ -527,14 +527,18 @@ _SOURCE_EXCLUSIONS = (
 # source_guidance names specific English-language outlets — those instructions
 # don't carry over when the query is in another language, so Perplexity just
 # returns whatever local sites happen to cover the topic. Instead, describe
-# the QUALITY CRITERIA: scientific/specialist publications, established
-# journalism, peer-reviewed coverage. This works in any language.
+# QUALITY CRITERIA that work in any language.
+# Crucially: state/official sources are NOT excluded — on political, conflict,
+# and policy topics they represent a legitimate and necessary perspective.
+# Quality filtering targets format (aggregators, blogs) not ownership.
 _NATIVE_QUERY_INSTRUCTIONS = (
-    "Prioritise: peer-reviewed academic journals and university research publications, "
-    "established specialist journalism (science, archaeology, technology, medicine, etc. "
-    "depending on the topic), and reputable national or international newspapers. "
-    "Avoid: state-owned TV news channels, entertainment and lifestyle magazines, tabloids, "
-    "blogs, and general aggregators. "
+    "Prioritise established news organisations with original reporting — both independent "
+    "press and official or state-funded outlets are valid, since government and state "
+    "positions are a legitimate and necessary perspective especially on political, conflict, "
+    "and policy topics. Include peer-reviewed journals and specialist publications when "
+    "relevant to the topic. "
+    "Avoid: news aggregators, content farms, entertainment and lifestyle sites, tabloids, "
+    "blogs, company press releases, and social media. "
     f"{_SOURCE_EXCLUSIONS}"
 )
 

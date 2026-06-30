@@ -236,6 +236,36 @@ def test_is_hub_page_keeps_real_headlines() -> None:
         assert not _is_hub_page(headline), f"expected real headline: {headline!r}"
 
 
+def test_native_query_instructions_do_not_exclude_state_media() -> None:
+    """State and official media must NOT be excluded from the native query.
+
+    On political, conflict, and policy topics (Ukraine war, Israel-Palestine,
+    etc.) the state IS one of the parties — their media represents a legitimate
+    side. Excluding state media by ownership would silently drop that perspective.
+    Quality filtering should target format (aggregators, blogs) not ownership.
+    """
+    from elephant.research import _NATIVE_QUERY_INSTRUCTIONS
+
+    lower = _NATIVE_QUERY_INSTRUCTIONS.lower()
+    # Must not tell Perplexity to avoid state/official sources
+    assert "avoid: state" not in lower, (
+        "_NATIVE_QUERY_INSTRUCTIONS tells Perplexity to avoid state sources — "
+        "this drops legitimate official perspectives on political/conflict topics"
+    )
+    assert "avoid state-owned" not in lower
+
+
+def test_native_query_instructions_acknowledge_official_sources_as_valid() -> None:
+    """The instructions must positively acknowledge state/official sources,
+    not just fail to exclude them — so Perplexity treats them as valid options."""
+    from elephant.research import _NATIVE_QUERY_INSTRUCTIONS
+
+    lower = _NATIVE_QUERY_INSTRUCTIONS.lower()
+    assert "official" in lower or "state-funded" in lower or "state" in lower, (
+        "_NATIVE_QUERY_INSTRUCTIONS should explicitly name official/state sources as valid"
+    )
+
+
 def test_gather_skips_excluded_sources() -> None:
     """gather() should not query excluded sources — verified by checking the
     active list filtering logic without making real network calls."""
