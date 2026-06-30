@@ -1249,3 +1249,38 @@ reject an already-obvious state-vs-state war. Verified 3x: Russia-Ukraine
 war now correctly gets sides every time, Belarus still works, AI Trends
 still correctly stays empty — the fix didn't cost back what the Belarus
 fix gained.
+
+## 2026-06-30 20:00 — Three dedup/relevance/quality bugs found and fixed
+
+Live user reports led to a debug session that uncovered three distinct bugs:
+
+**1. Repeating news (dedup window too short)**
+The semantic similarity check compared new article embeddings against stored
+ones from only the last N days — same window as the gather step. For a daily
+topic that's 2 days. So an ongoing story (same event, new URL each day) would
+slip through on day 3 because its first sighting was outside the comparison
+window. One user confirmed the same headline appeared for 5 consecutive days.
+Fix: always compare against the last 14 days of stored embeddings, regardless
+of how far back the gather step looks. `dedup.py` now uses `max(lookback_days,
+_SEMANTIC_LOOKBACK_DAYS=14)` for the similarity query.
+
+**2. Off-topic stories in Ukraine/Russia topic**
+The clustering agent (perspectives.py) filters off-topic articles — but was
+only given the short topic *name* (e.g. "Russian Impact"), not the full
+description. So it was deciding relevance based on a vague label that includes
+anything Russia-related: joint China-Russia air patrols, candy retail disputes,
+gay bar prosecutions, Spanish visa centers in Moscow. All were making it into
+the digest. Fix: pass `topic.description` to `perspectives.cluster()` and
+include it as "TOPIC FOCUS" in the filtering prompt so the LLM can tell
+on-topic from tangentially Russia-related.
+
+**3. Native query pulling low-quality sources for non-English topics**
+The native-language general query (added to catch regional stories) was sending
+the Russian topic query to Perplexity with instructions that named specific
+English-language outlets (Archaeology Magazine, Nature, etc.). Perplexity can't
+usefully apply those outlet names to a Russian-language search, so it just
+returned whatever Russian sites cover the topic — including TV BRICS, Снob.ru,
+Vesti.ru. Fix: native query now uses language-agnostic QUALITY CRITERIA
+(_NATIVE_QUERY_INSTRUCTIONS): peer-reviewed journals, specialist journalism,
+reputable national press; avoid state TV, entertainment magazines, tabloids.
+Didn't block domains (context-dependent quality) — described what to prefer.

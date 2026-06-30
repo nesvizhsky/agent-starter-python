@@ -289,7 +289,15 @@ async def gather(topic: Topic, lookback_hours: int = 48) -> list[Article]:
     # when the English translation shifts Perplexity's search toward international sources.
     has_native_query = general_subject != query_subject
     if has_native_query:
-        coros.append(_query_general(query_subject, lookback, today, source_instr, recency))
+        # Use quality-criteria instructions rather than outlet names here: the
+        # source_instr (or _GENERAL_QUERY_INSTRUCTIONS) names specific English-
+        # language publications which Perplexity can't usefully apply to a
+        # non-English query — it just returns whatever local sites cover the topic.
+        # Quality criteria (peer-reviewed, specialist journalism, avoid state TV)
+        # are language-agnostic and produce better native results.
+        coros.append(
+            _query_general(query_subject, lookback, today, _NATIVE_QUERY_INSTRUCTIONS, recency)
+        )
 
     raw = await asyncio.gather(*coros, return_exceptions=True)
 
@@ -513,6 +521,21 @@ _SOURCE_EXCLUSIONS = (
     "Do not cite: YouTube, company press releases or blogs, marketing content, "
     "social media posts, analyst market-research reports, or aggregator listicles. "
     "Each citation must be a primary news report or original publication — not a roundup of other news."  # noqa: E501
+)
+
+# Used for the native-language general query on non-English topics.
+# source_guidance names specific English-language outlets — those instructions
+# don't carry over when the query is in another language, so Perplexity just
+# returns whatever local sites happen to cover the topic. Instead, describe
+# the QUALITY CRITERIA: scientific/specialist publications, established
+# journalism, peer-reviewed coverage. This works in any language.
+_NATIVE_QUERY_INSTRUCTIONS = (
+    "Prioritise: peer-reviewed academic journals and university research publications, "
+    "established specialist journalism (science, archaeology, technology, medicine, etc. "
+    "depending on the topic), and reputable national or international newspapers. "
+    "Avoid: state-owned TV news channels, entertainment and lifestyle magazines, tabloids, "
+    "blogs, and general aggregators. "
+    f"{_SOURCE_EXCLUSIONS}"
 )
 
 # Fallback used only when a topic has no stored source_guidance.
@@ -784,9 +807,7 @@ async def identify_sides(description: str, topic_name: str) -> list[Side]:
     english_desc = await _to_english(description or topic_name)
     english_name = await _to_english(topic_name) if topic_name else ""
     for attempt in range(_SIDES_RESEARCH_ATTEMPTS):
-        query = _sides_research_prompt.format(
-            topic_name=english_name, description=english_desc
-        )
+        query = _sides_research_prompt.format(topic_name=english_name, description=english_desc)
         try:
             grounded = await _research(query)
         except Exception:  # noqa: BLE001
@@ -813,9 +834,7 @@ async def generate_source_guidance(description: str, topic_name: str) -> SourceG
     # not just in the language the user described the topic in.
     english_desc = await _to_english(description or topic_name)
     english_name = await _to_english(topic_name) if topic_name else ""
-    query = _guidance_research_prompt.format(
-        topic_name=english_name, description=english_desc
-    )
+    query = _guidance_research_prompt.format(topic_name=english_name, description=english_desc)
     try:
         grounded = await _research(query)
     except Exception:  # noqa: BLE001

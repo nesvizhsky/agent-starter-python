@@ -191,7 +191,10 @@ async def _run_digest(
         return
 
     stories = await perspectives.cluster(
-        fresh, topic_name=topic.name, lookback=research.lookback_label(lookback_hours)
+        fresh,
+        topic_name=topic.name,
+        topic_description=topic.description or "",
+        lookback=research.lookback_label(lookback_hours),
     )
     stories = await propaganda.analyze(stories, sides=topic.sides)
     language = await store.get_user_language(topic.telegram_id)

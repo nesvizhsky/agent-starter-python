@@ -111,10 +111,16 @@ async def _detect_contradictions(story: Story) -> list[Contradiction]:
 
 
 async def cluster(
-    articles: list[Article], topic_name: str = "", lookback: str = "48 hours"
+    articles: list[Article],
+    topic_name: str = "",
+    topic_description: str = "",
+    lookback: str = "48 hours",
 ) -> list[Story]:
     """Group *articles* into stories by event, ranked by importance.
 
+    topic_description: the full user-written description (used in filtering prompt
+    so the agent can tell apart on-topic from off-topic more accurately than the
+    short name alone allows).
     Returns an empty list for empty input without making an LLM call.
     Does NOT guarantee every article appears — off-topic or stale articles are dropped.
     Contradiction detection runs concurrently across all stories.
@@ -122,7 +128,7 @@ async def cluster(
     if not articles:
         return []
 
-    prompt = _format_prompt(articles, topic_name)
+    prompt = _format_prompt(articles, topic_name, topic_description)
     result = await _agent.run(prompt)
     stories = result.output.stories
 
@@ -241,12 +247,17 @@ def _attach_contexts(stories: list[Story], articles: list[Article]) -> None:
             view.context = ctx or general_ctx
 
 
-def _format_prompt(articles: list[Article], topic_name: str) -> str:
+def _format_prompt(articles: list[Article], topic_name: str, topic_description: str = "") -> str:
     lines: list[str] = []
 
     if topic_name:
         lines.append(f"TOPIC: {topic_name}\n")
-        lines.append("Only include articles directly about this topic. Discard anything else.\n")
+        if topic_description and topic_description != topic_name:
+            lines.append(f"TOPIC FOCUS: {topic_description}\n")
+        lines.append(
+            "Only include articles directly about this topic and focus. "
+            "Discard anything that is only tangentially or indirectly related.\n"
+        )
 
     # Include unique research contexts (one per source query) so the agent has
     # real content to draw on when writing source_view summaries.

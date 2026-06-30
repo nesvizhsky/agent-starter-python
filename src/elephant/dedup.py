@@ -25,6 +25,12 @@ from elephant.models import Article
 
 SIMILARITY_THRESHOLD = 0.85  # cosine similarity above which we treat two articles as the same story
 
+# Semantic dedup looks back this many days regardless of the gather window.
+# A daily topic gathers 2 days of news but must compare against 14 days of
+# stored embeddings, otherwise the same ongoing story (same event, different
+# URL each day) slips through once it's older than the gather window.
+_SEMANTIC_LOOKBACK_DAYS = 14
+
 
 async def filter_seen(
     topic_id: UUID,
@@ -33,8 +39,11 @@ async def filter_seen(
 ) -> tuple[list[Article], list[list[float]]]:
     """Remove articles the user has already seen for *topic_id*.
 
-    lookback_days: freshness window, derived by jobs.py from whichever checkup
-    slot triggered this run (or a default for a manual /check).
+    lookback_days: freshness window for the date filter — articles published
+    before this cutoff are dropped. The semantic similarity check always uses
+    a longer fixed window (_SEMANTIC_LOOKBACK_DAYS) so the same story can't
+    reappear just because the first time it was seen falls outside the gather
+    window.
     Returns (fresh_articles, their_embeddings).  The caller should pass both
     to store.record_seen() after sending the digest so future runs dedup correctly.
     """
@@ -74,8 +83,12 @@ async def filter_seen(
     # Check each embedding against the stored corpus concurrently.
     # Fail-open: if the similarity check errors, include the article
     # (better to show a near-duplicate than miss real news).
+    # Use a longer lookback than the gather window so an ongoing story (same
+    # event, new URL each day) can't keep slipping through once it's older
+    # than lookback_days.
+    semantic_days = max(lookback_days, _SEMANTIC_LOOKBACK_DAYS)
     similarities = await asyncio.gather(
-        *[store.max_similarity(topic_id, emb, lookback_days) for emb in embeddings],
+        *[store.max_similarity(topic_id, emb, semantic_days) for emb in embeddings],
         return_exceptions=True,
     )
 
