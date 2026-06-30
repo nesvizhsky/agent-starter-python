@@ -1,0 +1,85 @@
+{% extends "admin/base.html" %}
+{% set active = "logs" %}
+
+{% block title %}Logs{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl space-y-8">
+
+  <h1 class="text-2xl font-bold text-white">Logs</h1>
+
+  <!-- ── App logs ── -->
+  <div class="bg-gray-900 border border-gray-800 rounded-xl">
+    <div class="px-6 py-4 border-b border-gray-800 flex items-center justify-between gap-4 flex-wrap">
+      <div>
+        <h2 class="text-sm font-semibold text-gray-300">Application logs</h2>
+        <p class="text-xs text-gray-600 mt-0.5">From <code class="text-gray-500">logs/agent.log</code> · current deployment only · auto-refreshes every 5 s</p>
+      </div>
+      <!-- Level filter -->
+      <div class="flex items-center gap-2 text-xs">
+        {% for lv in ['ALL', 'DEBUG', 'INFO', 'WARNING', 'ERROR'] %}
+          <a href="/admin/logs?level={{ lv }}"
+             class="px-2 py-1 rounded border {% if level == lv %}bg-gray-700 border-gray-500 text-white{% else %}border-gray-700 text-gray-500 hover:text-gray-300{% endif %}">
+            {{ lv }}
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="p-4 overflow-x-auto max-h-[520px] overflow-y-auto"
+         id="log-container"
+         hx-get="/admin/logs/lines?level={{ level }}"
+         hx-trigger="load, every 5s"
+         hx-swap="innerHTML">
+      <p class="text-gray-600 text-xs">Loading…</p>
+    </div>
+  </div>
+
+  <!-- ── Admin audit log ── -->
+  <div class="bg-gray-900 border border-gray-800 rounded-xl">
+    <div class="px-6 py-4 border-b border-gray-800">
+      <h2 class="text-sm font-semibold text-gray-300">Admin audit log</h2>
+      <p class="text-xs text-gray-600 mt-0.5">Every change made through this panel · persists across deployments</p>
+    </div>
+    {% if audit %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-gray-600 border-b border-gray-800">
+            <th class="text-left px-6 py-2">When</th>
+            <th class="text-left px-6 py-2">Action</th>
+            <th class="text-left px-6 py-2">Entity</th>
+            <th class="text-left px-6 py-2">Details</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-800">
+          {% for row in audit %}
+          <tr class="hover:bg-gray-800/40">
+            <td class="px-6 py-2 text-gray-500 whitespace-nowrap text-xs">{{ time_ago(row.created_at) }}</td>
+            <td class="px-6 py-2">
+              {% set a = row.action %}
+              {% if 'error' in a or 'fail' in a %}
+                <span class="text-red-400 font-mono text-xs">{{ a }}</span>
+              {% elif 'run' in a %}
+                <span class="text-green-400 font-mono text-xs">{{ a }}</span>
+              {% elif 'pause' in a %}
+                <span class="text-yellow-400 font-mono text-xs">{{ a }}</span>
+              {% elif 'clear' in a %}
+                <span class="text-orange-400 font-mono text-xs">{{ a }}</span>
+              {% else %}
+                <span class="text-blue-400 font-mono text-xs">{{ a }}</span>
+              {% endif %}
+            </td>
+            <td class="px-6 py-2 text-gray-300 text-xs">{{ row.entity or '—' }}</td>
+            <td class="px-6 py-2 text-gray-500 text-xs">{{ row.details or '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="px-6 py-8 text-gray-600 text-sm text-center">No admin actions recorded yet.</p>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

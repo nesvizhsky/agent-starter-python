@@ -1,0 +1,24 @@
+{% if not lines %}
+<p class="text-gray-600 text-sm px-1">No log entries found{% if level and level != 'ALL' %} for level {{ level }}{% endif %}.</p>
+{% else %}
+<div class="font-mono text-xs leading-5 space-y-px">
+{% for line in lines %}
+  {% set lvl = line.level | upper %}
+  {% if 'ERROR' in lvl or 'CRITICAL' in lvl %}
+    {% set cls = "text-red-400" %}
+  {% elif 'WARNING' in lvl or 'WARN' in lvl %}
+    {% set cls = "text-yellow-400" %}
+  {% elif 'DEBUG' in lvl %}
+    {% set cls = "text-gray-600" %}
+  {% else %}
+    {% set cls = "text-gray-300" %}
+  {% endif %}
+  <div class="flex gap-2 group hover:bg-gray-800/40 px-1 rounded">
+    <span class="text-gray-600 shrink-0 w-36">{{ line.ts }}</span>
+    <span class="shrink-0 w-8 {{ cls }} font-semibold">{{ line.level[:4] }}</span>
+    <span class="text-gray-600 shrink-0 truncate max-w-[180px]" title="{{ line.source }}">{{ line.source }}</span>
+    <span class="{{ cls }} break-all">{{ line.msg }}</span>
+  </div>
+{% endfor %}
+</div>
+{% endif %}

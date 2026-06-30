@@ -11,6 +11,7 @@ store needed.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import secrets
@@ -19,16 +20,20 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Cookie, Form, Request
+from fastapi import APIRouter, Cookie, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from loguru import logger
+from telegram import InputProfilePhotoStatic
 
 from agent.config import get_settings
+from agent.logging_setup import LOG_FILE
 from agent.services import db
 from elephant import jobs, store
 from elephant.bot_state import get_bot
 from elephant.models import Topic
+
+_LOG_TAIL = 300  # number of recent log lines to show
 
 router = APIRouter(prefix="/admin")
 _templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
@@ -332,12 +337,18 @@ async def user_save(
     if not _authenticated(elephant_admin):
         return RedirectResponse("/admin/login", status_code=303)
 
+    changes: list[str] = []
+    if language.strip():
+        changes.append(f"language={language.strip()!r}")
+    if timezone.strip():
+        changes.append(f"timezone={timezone.strip()!r}")
     await store.update_user(
         telegram_id,
         language=language.strip() or None,
         timezone=timezone.strip() or None,
     )
     logger.info("admin: updated user {}", telegram_id)
+    await store.log_admin_action("user.edit", str(telegram_id), "; ".join(changes) or "no changes")
     return RedirectResponse(f"/admin/users/{telegram_id}?saved=1", status_code=303)
 
 
@@ -451,6 +462,9 @@ async def topic_save(
 
     await store.update_topic(topic_id, **kwargs)
     logger.info("admin: updated topic {}", topic_id)
+    name_row = await db.fetchrow("SELECT name FROM elephant_topics WHERE id = $1", topic_id)
+    entity = str(name_row["name"]) if name_row else str(topic_id)
+    await store.log_admin_action("topic.edit", entity, "settings updated")
     return RedirectResponse(f"/admin/topics/{topic_id}?saved=1", status_code=303)
 
 
@@ -465,12 +479,14 @@ async def topic_toggle_pause(
     if not _authenticated(elephant_admin):
         return Response(status_code=401)
 
-    row = await db.fetchrow("SELECT paused FROM elephant_topics WHERE id = $1", topic_id)
+    row = await db.fetchrow("SELECT paused, name FROM elephant_topics WHERE id = $1", topic_id)
     if not row:
         return Response(status_code=404)
     new_paused = not row["paused"]
     await store.update_topic(topic_id, paused=new_paused)
     logger.info("admin: topic {} paused={}", topic_id, new_paused)
+    action = "topic.pause" if new_paused else "topic.resume"
+    await store.log_admin_action(action, str(row["name"]), "paused" if new_paused else "resumed")
     label = "Resume" if new_paused else "Pause"
     cls = "bg-green-700 hover:bg-green-600" if new_paused else "bg-yellow-700 hover:bg-yellow-600"
     badge = (
@@ -500,6 +516,9 @@ async def topic_clear_seen(
         return Response(status_code=401)
     n = await store.clear_seen(topic_id)
     logger.info("admin: cleared {} seen records for topic {}", n, topic_id)
+    name_row = await db.fetchrow("SELECT name FROM elephant_topics WHERE id = $1", topic_id)
+    entity = str(name_row["name"]) if name_row else str(topic_id)
+    await store.log_admin_action("topic.clear-seen", entity, f"cleared {n} seen records")
     return HTMLResponse(
         '<span id="seen-info" class="text-gray-400 text-sm">Cleared — 0 records now</span>'
     )
@@ -529,6 +548,9 @@ async def topic_run_now(
 
     asyncio.create_task(_run())
     logger.info("admin: run-now started for topic {}", topic_id)
+    name_row = await db.fetchrow("SELECT name FROM elephant_topics WHERE id = $1", topic_id)
+    entity = str(name_row["name"]) if name_row else str(topic_id)
+    await store.log_admin_action("topic.run", entity, "digest triggered manually")
     return HTMLResponse(
         '<span id="run-status" class="text-green-400 text-sm">'
         "Running… check Telegram in ~30s"
@@ -561,6 +583,10 @@ async def topic_clear_and_run(
             logger.exception("admin: clear-and-run failed for topic {}", topic_id)
 
     asyncio.create_task(_run())
+    name_row = await db.fetchrow("SELECT name FROM elephant_topics WHERE id = $1", topic_id)
+    entity = str(name_row["name"]) if name_row else str(topic_id)
+    details = f"cleared {n} records + triggered digest"
+    await store.log_admin_action("topic.clear-and-run", entity, details)
     return HTMLResponse(
         '<span id="run-status" class="text-green-400 text-sm">'
         f"Cleared {n} seen records — running… check Telegram in ~30s"
@@ -595,6 +621,166 @@ async def topics_list(
         """
     )
     return _render("admin/topics.html", request, topics=[dict(r) for r in rows])
+
+
+# ---------------------------------------------------------------------------
+# Logs + audit
+# ---------------------------------------------------------------------------
+
+
+def _parse_log_line(line: str) -> dict[str, str]:
+    parts = line.split(" | ", 3)
+    if len(parts) == 4:
+        return {
+            "ts": parts[0].strip(),
+            "level": parts[1].strip(),
+            "source": parts[2].strip(),
+            "msg": parts[3].strip(),
+        }
+    return {"ts": "", "level": "INFO", "source": "", "msg": line.strip()}
+
+
+def _read_log_tail(n: int = _LOG_TAIL, level_filter: str = "") -> list[dict[str, str]]:
+    path = Path(LOG_FILE)
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
+    parsed = [_parse_log_line(ln) for ln in lines if ln.strip()]
+    if level_filter and level_filter != "ALL":
+        parsed = [p for p in parsed if p["level"].startswith(level_filter)]
+    return list(reversed(parsed))  # newest first
+
+
+@router.get("/logs", response_class=HTMLResponse)
+async def logs_page(
+    request: Request,
+    elephant_admin: str | None = Cookie(default=None),
+    level: str = "ALL",
+) -> Response:
+    if not _enabled():
+        return Response(status_code=404)
+    if not _authenticated(elephant_admin):
+        return RedirectResponse("/admin/login", status_code=303)
+    audit = await store.get_admin_log()
+    lines = _read_log_tail(level_filter=level)
+    return _render("admin/logs.html", request, audit=audit, lines=lines, level=level)
+
+
+@router.get("/logs/lines", response_class=HTMLResponse)
+async def log_lines_partial(
+    request: Request,
+    elephant_admin: str | None = Cookie(default=None),
+    level: str = "ALL",
+) -> Response:
+    if not _authenticated(elephant_admin):
+        return Response(status_code=401)
+    lines = _read_log_tail(level_filter=level)
+    return _render("admin/log_lines.html", request, lines=lines)
+
+
+# ---------------------------------------------------------------------------
+# Bot settings
+# ---------------------------------------------------------------------------
+
+
+@router.get("/bot", response_class=HTMLResponse)
+async def bot_settings_page(
+    request: Request,
+    elephant_admin: str | None = Cookie(default=None),
+    saved: str | None = None,
+    error: str | None = None,
+) -> Response:
+    if not _enabled():
+        return Response(status_code=404)
+    if not _authenticated(elephant_admin):
+        return RedirectResponse("/admin/login", status_code=303)
+
+    bot = get_bot()
+    bot_info = bot_name = bot_desc = bot_short_desc = bot_photo_b64 = None
+    fetch_error: str | None = error
+
+    if bot:
+        try:
+            bot_info_obj = await bot.get_me()
+            bot_info = {
+                "id": bot_info_obj.id,
+                "username": bot_info_obj.username,
+                "first_name": bot_info_obj.first_name,
+            }
+            name_obj = await bot.get_my_name()
+            desc_obj = await bot.get_my_description()
+            short_obj = await bot.get_my_short_description()
+            bot_name = name_obj.name if name_obj else ""
+            bot_desc = desc_obj.description if desc_obj else ""
+            bot_short_desc = short_obj.short_description if short_obj else ""
+            try:
+                photos = await bot.get_user_profile_photos(bot_info_obj.id, limit=1)
+                if photos.total_count > 0:
+                    thumb = photos.photos[0][0]
+                    f = await bot.get_file(thumb.file_id)
+                    data = await f.download_as_bytearray()
+                    bot_photo_b64 = base64.b64encode(bytes(data)).decode()
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as exc:  # noqa: BLE001
+            fetch_error = str(exc)
+
+    return _render(
+        "admin/bot.html",
+        request,
+        bot_info=bot_info,
+        bot_name=bot_name or "",
+        bot_desc=bot_desc or "",
+        bot_short_desc=bot_short_desc or "",
+        bot_photo_b64=bot_photo_b64,
+        saved=saved,
+        error=fetch_error,
+    )
+
+
+@router.post("/bot", response_class=HTMLResponse)
+async def bot_settings_save(
+    elephant_admin: str | None = Cookie(default=None),
+    name: str = Form(default=""),
+    description: str = Form(default=""),
+    short_description: str = Form(default=""),
+    photo: UploadFile | None = None,
+) -> Response:
+    if not _enabled():
+        return Response(status_code=404)
+    if not _authenticated(elephant_admin):
+        return RedirectResponse("/admin/login", status_code=303)
+
+    bot = get_bot()
+    if not bot:
+        return RedirectResponse("/admin/bot?error=Bot+not+available", status_code=303)
+
+    changes: list[str] = []
+    try:
+        if name.strip():
+            await bot.set_my_name(name.strip())
+            changes.append(f"name → {name.strip()!r}")
+        if description.strip():
+            await bot.set_my_description(description.strip())
+            changes.append("description updated")
+        if short_description.strip():
+            await bot.set_my_short_description(short_description.strip())
+            changes.append("short description updated")
+        if photo and photo.filename:
+            photo_bytes = await photo.read()
+            if photo_bytes:
+                await bot.set_my_profile_photo(InputProfilePhotoStatic(photo_bytes))
+                changes.append("profile photo updated")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("admin: bot settings save failed")
+        msg = str(exc)[:120].replace(" ", "+")
+        return RedirectResponse(f"/admin/bot?error={msg}", status_code=303)
+
+    if changes:
+        await store.log_admin_action("bot.settings", "bot", "; ".join(changes))
+        logger.info("admin: bot settings updated: {}", ", ".join(changes))
+
+    return RedirectResponse("/admin/bot?saved=1", status_code=303)
 
 
 # ---------------------------------------------------------------------------

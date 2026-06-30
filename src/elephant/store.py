@@ -10,6 +10,7 @@ Vectors (pgvector) are passed as formatted strings and cast in SQL:
 
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -403,6 +404,25 @@ async def clear_seen(topic_id: UUID) -> int:
     n = int(row["n"]) if row else 0
     await db.execute("DELETE FROM elephant_seen WHERE topic_id = $1", topic_id)
     return n
+
+
+async def log_admin_action(action: str, entity: str, details: str = "") -> None:
+    """Append a row to the admin audit log. Fire-and-forget: never raises."""
+    with contextlib.suppress(Exception):
+        await db.execute(
+            "INSERT INTO elephant_admin_log (action, entity, details) VALUES ($1, $2, $3)",
+            action,
+            entity,
+            details,
+        )
+
+
+async def get_admin_log(limit: int = 200) -> list[dict[str, object]]:
+    rows = await db.fetch(
+        "SELECT * FROM elephant_admin_log ORDER BY created_at DESC LIMIT $1",
+        limit,
+    )
+    return [dict(r) for r in rows]
 
 
 async def delete_topic(topic_id: UUID) -> None:

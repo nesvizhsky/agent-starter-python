@@ -1,0 +1,97 @@
+{% extends "admin/base.html" %}
+{% set active = "bot" %}
+
+{% block title %}Bot Settings{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl space-y-6">
+
+  <h1 class="text-2xl font-bold text-white">Bot Settings</h1>
+
+  {% if saved %}
+  <div class="bg-green-950 border border-green-800 text-green-300 text-sm px-4 py-2 rounded-lg">
+    ✓ Changes saved and applied on Telegram.
+  </div>
+  {% endif %}
+
+  {% if error %}
+  <div class="bg-red-950 border border-red-800 text-red-300 text-sm px-4 py-2 rounded-lg">
+    ✗ {{ error }}
+  </div>
+  {% endif %}
+
+  <!-- Bot info (read-only) -->
+  {% if bot_info %}
+  <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 flex items-center gap-5">
+    {% if bot_photo_b64 %}
+    <img src="data:image/jpeg;base64,{{ bot_photo_b64 }}"
+         class="w-16 h-16 rounded-full object-cover shrink-0 ring-2 ring-gray-700">
+    {% else %}
+    <div class="w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center text-2xl shrink-0">🤖</div>
+    {% endif %}
+    <div>
+      <div class="text-white font-semibold text-lg">{{ bot_name or bot_info.first_name }}</div>
+      <div class="text-gray-400 text-sm">@{{ bot_info.username }}</div>
+      <div class="text-gray-600 text-xs mt-0.5">ID: {{ bot_info.id }}</div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Edit form -->
+  <form method="post" action="/admin/bot" enctype="multipart/form-data"
+        class="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-5">
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">
+        Display name
+        <span class="text-gray-600 font-normal">— shown in Telegram chats and search</span>
+      </label>
+      <input type="text" name="name" value="{{ bot_name }}"
+             placeholder="e.g. Eat the Elephant"
+             class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500">
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">
+        Description
+        <span class="text-gray-600 font-normal">— shown when a user opens the bot for the first time</span>
+      </label>
+      <textarea name="description" rows="4"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 resize-y">{{ bot_desc }}</textarea>
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">
+        Short description
+        <span class="text-gray-600 font-normal">— shown on the bot's profile page (max ~120 chars)</span>
+      </label>
+      <input type="text" name="short_description" value="{{ bot_short_desc }}"
+             placeholder="e.g. Your personal multi-perspective news digest"
+             class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500">
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">
+        Profile photo
+        <span class="text-gray-600 font-normal">— JPEG, replaces current photo</span>
+      </label>
+      <input type="file" name="photo" accept="image/jpeg,image/jpg"
+             class="block text-sm text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-gray-700 file:text-gray-200 hover:file:bg-gray-600 cursor-pointer">
+      <p class="text-xs text-gray-600 mt-1">Leave empty to keep the current photo.</p>
+    </div>
+
+    <div class="pt-2 flex justify-end">
+      <button type="submit"
+              class="bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold px-6 py-2 rounded transition">
+        Save changes
+      </button>
+    </div>
+  </form>
+
+  <div class="text-xs text-gray-600 space-y-1 px-1">
+    <p>Changes to name, description, and short description apply immediately via the Bot API.</p>
+    <p>Bot <strong class="text-gray-500">username</strong> (@handle) can only be changed via <a href="https://t.me/BotFather" class="text-gray-400 hover:text-white underline" target="_blank">@BotFather</a>.</p>
+  </div>
+
+</div>
+{% endblock %}
