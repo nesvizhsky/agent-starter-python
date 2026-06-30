@@ -881,6 +881,7 @@ async def settings_page(
     elephant_admin: str | None = Cookie(default=None),
     saved: str | None = None,
     revoked: str | None = None,
+    error: str | None = None,
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
@@ -902,6 +903,7 @@ async def settings_page(
         full_username=s.admin_username,
         saved=saved,
         revoked=revoked,
+        error=error,
     )
 
 
@@ -916,8 +918,11 @@ async def settings_ro_set(
     role = await _get_role(elephant_admin)
     if role != "full":
         return Response(status_code=403)
+    s = get_settings()
     uname = ro_username.strip()
     pw = password.strip()
+    if uname and uname == s.admin_username:
+        return RedirectResponse("/admin/settings?error=username_conflict", status_code=303)
     if uname:
         await store.set_admin_setting(_RO_USERNAME_KEY, uname)
     if pw:

@@ -20,6 +20,12 @@
   </div>
   {% endif %}
 
+  {% if error == 'username_conflict' %}
+  <div class="bg-red-950 border border-red-800 text-red-300 text-sm px-4 py-2 rounded-lg">
+    ✗ The read-only username cannot be the same as the full admin username (<code class="font-mono">{{ full_username }}</code>). Choose a different one.
+  </div>
+  {% endif %}
+
   <!-- Read-only admin section -->
   <div class="bg-gray-900 border border-gray-800 rounded-xl divide-y divide-gray-800">
 
