@@ -1,0 +1,77 @@
+{% extends "admin/base.html" %}
+{% set active = "topics" %}
+
+{% block title %}Topics{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl space-y-6">
+
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-white">Topics <span class="text-gray-500 text-lg font-normal">({{ topics|length }})</span></h1>
+  </div>
+
+  <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-xs text-gray-500 border-b border-gray-800">
+          <th class="text-left px-6 py-3">Topic</th>
+          <th class="text-left px-6 py-3">Owner</th>
+          <th class="text-left px-6 py-3">Last digest</th>
+          <th class="text-left px-6 py-3">Seen</th>
+          <th class="text-left px-6 py-3">Customized</th>
+          <th class="text-left px-6 py-3">Status</th>
+          <th class="px-6 py-3"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-800">
+        {% for t in topics %}
+        <tr class="hover:bg-gray-800/50">
+          <td class="px-6 py-3">
+            <a href="/admin/topics/{{ t.id }}" class="text-blue-400 hover:underline font-medium">
+              {{ t.name }}
+            </a>
+            {% if t.description %}
+              <p class="text-gray-600 text-xs mt-0.5 truncate max-w-xs">{{ t.description }}</p>
+            {% endif %}
+          </td>
+          <td class="px-6 py-3 text-gray-400">
+            <a href="/admin/users/{{ t.telegram_id }}" class="hover:text-white">
+              {{ t.first_name }}{% if t.username %} <span class="text-gray-600">@{{ t.username }}</span>{% endif %}
+            </a>
+          </td>
+          <td class="px-6 py-3 text-gray-400 whitespace-nowrap">{{ time_ago(t.last_sent_at) }}</td>
+          <td class="px-6 py-3 text-gray-400">{{ t.seen_count }}</td>
+          <td class="px-6 py-3">
+            <div class="flex gap-1 flex-wrap">
+              {% if t.source_guidance %}
+                <span class="bg-blue-950 text-blue-400 text-xs px-1.5 py-0.5 rounded">guidance</span>
+              {% endif %}
+              {% if t.feedback_notes %}
+                <span class="bg-purple-950 text-purple-400 text-xs px-1.5 py-0.5 rounded">notes</span>
+              {% endif %}
+              {% if not t.source_guidance and not t.feedback_notes %}
+                <span class="text-gray-700 text-xs">—</span>
+              {% endif %}
+            </div>
+          </td>
+          <td class="px-6 py-3">
+            {% if t.paused %}
+              <span class="text-yellow-400 text-xs font-semibold">paused</span>
+            {% else %}
+              <span class="text-green-400 text-xs">active</span>
+            {% endif %}
+          </td>
+          <td class="px-6 py-3 text-right">
+            <a href="/admin/topics/{{ t.id }}?edit=1"
+               class="text-xs text-gray-600 hover:text-blue-400 whitespace-nowrap">✏️ Edit</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="px-6 py-10 text-gray-500 text-center">No topics yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+{% endblock %}

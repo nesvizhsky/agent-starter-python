@@ -1,0 +1,270 @@
+{% extends "admin/base.html" %}
+{% set active = "topics" %}
+
+{% block title %}{{ topic.name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl space-y-6">
+
+  <div class="text-sm text-gray-500">
+    <a href="/admin/topics" class="hover:text-gray-300">Topics</a>
+    <span class="mx-2">›</span>
+    <a href="/admin/users/{{ topic.telegram_id }}" class="hover:text-gray-300">
+      {{ owner.first_name }}{% if owner.username %} @{{ owner.username }}{% endif %}
+    </a>
+    <span class="mx-2">›</span>
+    <span class="text-white">{{ topic.name }}</span>
+  </div>
+
+  {% if saved %}
+  <div class="bg-green-950 border border-green-800 text-green-300 text-sm px-4 py-2 rounded-lg">
+    ✓ Changes saved.
+  </div>
+  {% endif %}
+
+  <!-- Header card: status, stats, actions -->
+  <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-5">
+
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-bold text-white">{{ topic.name }}</h1>
+        <div class="text-gray-500 text-xs mt-1">ID: {{ topic.id }}</div>
+      </div>
+      <div id="pause-block" class="flex items-center gap-3 shrink-0">
+        {% if topic.paused %}
+          <span class="text-yellow-400 text-xs font-semibold">PAUSED</span>
+          <button hx-post="/admin/topics/{{ topic.id }}/pause"
+                  hx-target="#pause-block" hx-swap="outerHTML"
+                  class="px-3 py-1 rounded text-xs text-white bg-green-700 hover:bg-green-600">Resume</button>
+        {% else %}
+          <span class="text-green-400 text-xs font-semibold">ACTIVE</span>
+          <button hx-post="/admin/topics/{{ topic.id }}/pause"
+                  hx-target="#pause-block" hx-swap="outerHTML"
+                  class="px-3 py-1 rounded text-xs text-white bg-yellow-700 hover:bg-yellow-600">Pause</button>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Stats row -->
+    <div class="grid grid-cols-3 gap-4 text-sm">
+      <div>
+        <div class="text-xs text-gray-500">Last digest</div>
+        <div class="text-white">{{ time_ago(topic.last_sent_at) }}</div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-500">Seen articles</div>
+        <div id="seen-info" class="flex items-center gap-2">
+          <span class="text-white">{{ seen_count }}</span>
+          <button hx-post="/admin/topics/{{ topic.id }}/clear-seen"
+                  hx-target="#seen-info" hx-swap="outerHTML"
+                  hx-confirm="Clear all {{ seen_count }} seen records? The next digest may repeat old news."
+                  class="text-xs text-red-400 hover:text-red-300 underline">clear</button>
+        </div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-500">Schedule ({{ topic.timezone }})</div>
+        <div class="text-white text-xs">
+          {% if slots %}{% for s in slots %}<div>{{ s }}</div>{% endfor %}
+          {% else %}—{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Run now buttons -->
+    <div class="pt-4 border-t border-gray-800 flex items-center gap-3 flex-wrap">
+      <button hx-post="/admin/topics/{{ topic.id }}/run"
+              hx-target="#run-status" hx-swap="outerHTML"
+              class="bg-blue-700 hover:bg-blue-600 text-white text-xs font-semibold px-4 py-2 rounded transition">
+        ▶ Run now
+      </button>
+      <button hx-post="/admin/topics/{{ topic.id }}/clear-and-run"
+              hx-target="#run-status" hx-swap="outerHTML"
+              hx-confirm="Clear all seen records AND run a digest immediately. Continue?"
+              class="bg-orange-800 hover:bg-orange-700 text-white text-xs font-semibold px-4 py-2 rounded transition">
+        🗑 Clear seen + Run now
+      </button>
+      <span id="run-status" class="text-gray-600 text-xs"></span>
+    </div>
+  </div>
+
+  <!-- Settings: view mode or edit mode -->
+  {% if editing %}
+
+  <!-- EDIT MODE -->
+  <form method="post" action="/admin/topics/{{ topic.id }}" class="bg-gray-900 border border-blue-800 rounded-xl p-6 space-y-5">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-white">Edit settings</h2>
+      <a href="/admin/topics/{{ topic.id }}" class="text-xs text-gray-500 hover:text-gray-300">✕ Cancel</a>
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">
+        Description
+        <span class="text-gray-600 font-normal">— search query sent to Perplexity</span>
+      </label>
+      <textarea name="description" rows="3" autofocus
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500 resize-y">{{ topic.description or '' }}</textarea>
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">
+        Source guidance
+        <span class="text-gray-600 font-normal">— which sources to prioritize (general query)</span>
+      </label>
+      <textarea name="source_guidance" rows="4"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500 resize-y">{{ topic.source_guidance or '' }}</textarea>
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1">
+        Feedback notes
+        <span class="text-gray-600 font-normal">— corrections injected into digest agent every run</span>
+      </label>
+      <textarea name="feedback_notes" rows="3"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 resize-y">{{ topic.feedback_notes or '' }}</textarea>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">Tracked sources <span class="text-gray-600 font-normal">— one per line</span></label>
+        <textarea name="sources" rows="6"
+                  class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500 resize-y">{{ topic.sources | join('\n') }}</textarea>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">Excluded sources <span class="text-gray-600 font-normal">— one per line</span></label>
+        <textarea name="excluded_sources" rows="6"
+                  class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500 resize-y">{{ topic.excluded_sources | join('\n') }}</textarea>
+      </div>
+    </div>
+
+    <div class="max-w-xs">
+      <label class="block text-xs text-gray-400 mb-1">
+        Timezone override
+        <span class="text-gray-600 font-normal">— current: {{ topic.timezone }}</span>
+      </label>
+      <input type="text" name="timezone" value=""
+             placeholder="{{ topic.timezone }}"
+             class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-blue-500">
+    </div>
+
+    <div class="flex justify-end gap-3 pt-2">
+      <a href="/admin/topics/{{ topic.id }}"
+         class="px-5 py-2 text-sm text-gray-400 hover:text-white rounded border border-gray-700 hover:border-gray-500 transition">
+        Cancel
+      </a>
+      <button type="submit"
+              class="bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold px-5 py-2 rounded transition">
+        Save changes
+      </button>
+    </div>
+  </form>
+
+  {% else %}
+
+  <!-- VIEW MODE -->
+  <div class="bg-gray-900 border border-gray-800 rounded-xl">
+    <div class="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-gray-300">Settings</h2>
+      <a href="/admin/topics/{{ topic.id }}?edit=1"
+         class="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white px-3 py-1.5 rounded border border-gray-700 transition">
+        ✏️ Edit
+      </a>
+    </div>
+    <div class="divide-y divide-gray-800">
+
+      <div class="px-6 py-4">
+        <div class="text-xs text-gray-500 mb-1">Description</div>
+        <div class="text-sm text-white font-mono whitespace-pre-wrap">{{ topic.description or '—' }}</div>
+      </div>
+
+      <div class="px-6 py-4">
+        <div class="text-xs text-gray-500 mb-1">Source guidance</div>
+        <div class="text-sm text-white font-mono whitespace-pre-wrap">{{ topic.source_guidance or '—' }}</div>
+      </div>
+
+      <div class="px-6 py-4">
+        <div class="text-xs text-gray-500 mb-1">Feedback notes</div>
+        <div class="text-sm text-white whitespace-pre-wrap">{{ topic.feedback_notes or '—' }}</div>
+      </div>
+
+      <div class="px-6 py-4 grid grid-cols-2 gap-6">
+        <div>
+          <div class="text-xs text-gray-500 mb-2">Tracked sources ({{ topic.sources|length }})</div>
+          {% if topic.sources %}
+            {% for s in topic.sources %}
+              <div class="text-xs text-gray-300 font-mono">{{ s }}</div>
+            {% endfor %}
+          {% else %}
+            <div class="text-xs text-gray-600">none</div>
+          {% endif %}
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 mb-2">Excluded sources ({{ topic.excluded_sources|length }})</div>
+          {% if topic.excluded_sources %}
+            {% for s in topic.excluded_sources %}
+              <div class="text-xs text-gray-300 font-mono">{{ s }}</div>
+            {% endfor %}
+          {% else %}
+            <div class="text-xs text-gray-600">none</div>
+          {% endif %}
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  {% endif %}
+
+  <!-- Read-only: identified sides -->
+  {% if topic.sides %}
+  <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+    <h2 class="text-sm font-semibold text-gray-300 mb-3">Identified sides</h2>
+    <div class="grid grid-cols-2 gap-4">
+      {% for side in topic.sides %}
+      <div class="bg-gray-800 rounded-lg p-3">
+        <div class="text-sm font-medium text-white mb-2">{{ side.name }}</div>
+        {% for outlet in side.outlets %}
+          <div class="text-xs text-gray-400">{{ outlet }}</div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Read-only: default outlets -->
+  {% if topic.default_outlets %}
+  <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+    <h2 class="text-sm font-semibold text-gray-300 mb-2">Auto-selected default outlets</h2>
+    <div class="flex flex-wrap gap-2">
+      {% for outlet in topic.default_outlets %}
+        <span class="bg-gray-800 text-gray-300 text-xs px-2 py-1 rounded">{{ outlet }}</span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Feedback -->
+  {% if feedback %}
+  <div class="bg-gray-900 border border-gray-800 rounded-xl">
+    <div class="px-6 py-4 border-b border-gray-800">
+      <h2 class="text-sm font-semibold text-gray-300">Feedback for this topic</h2>
+    </div>
+    <div class="divide-y divide-gray-800">
+      {% for f in feedback %}
+      <div class="px-6 py-3 text-sm">
+        <div class="flex items-center gap-3">
+          <span class="text-gray-500 text-xs">{{ time_ago(f.created_at) }}</span>
+          {% if f.signal %}
+            <span class="bg-gray-800 text-gray-300 text-xs px-2 py-0.5 rounded">{{ f.signal }}</span>
+          {% endif %}
+        </div>
+        {% if f.note %}<p class="text-gray-300 mt-1">{{ f.note }}</p>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

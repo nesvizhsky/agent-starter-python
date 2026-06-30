@@ -23,7 +23,9 @@ from telegram.ext import Application
 
 from agent.config import get_settings
 from agent.logging_setup import setup_logging
+from elephant.admin import router as admin_router
 from elephant.bot import _post_init, build_application
+from elephant.bot_state import set_bot
 from elephant.jobs import run_due_digests
 
 _ptb: Application | None = None  # type: ignore[type-arg]
@@ -41,6 +43,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # PTB only auto-calls post_init from run_polling/run_webhook; we drive manually.
     await _post_init(ptb)
     await ptb.start()
+    set_bot(ptb.bot)
 
     if settings.public_url:
         url = f"{settings.public_url.rstrip('/')}/telegram/webhook"
@@ -60,6 +63,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Eat the Elephant", lifespan=lifespan)
+app.include_router(admin_router)
 
 
 @app.get("/")

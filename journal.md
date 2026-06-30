@@ -1284,3 +1284,31 @@ Vesti.ru. Fix: native query now uses language-agnostic QUALITY CRITERIA
 (_NATIVE_QUERY_INSTRUCTIONS): peer-reviewed journals, specialist journalism,
 reputable national press; avoid state TV, entertainment magazines, tabloids.
 Didn't block domains (context-dependent quality) — described what to prefer.
+
+## 2026-06-30 — Built admin web interface at /admin
+
+Added a full admin panel for the bot operator:
+
+**Auth**: Stateless HMAC cookie (`elephant_admin`). Token is `HMAC(ADMIN_PASSWORD, "elephant-admin-v1")`.
+If `ADMIN_PASSWORD` is not set, all `/admin` routes return 404 — safe to deploy without it.
+
+**Pages built**:
+- `/admin` — dashboard with 8 stat cards (users, topics, feedback, etc.) + two HTML bar charts
+  (digest activity per day and user growth, both last 30 days, no JS libraries)
+- `/admin/users` — full user list with topic count, last digest, language/TZ
+- `/admin/users/{id}` — per-user detail: profile, all topics with seen-count, recent feedback
+- `/admin/topics/{id}` — topic view + edit form (description, source_guidance, feedback_notes,
+  sources, excluded_sources); HTMX pause toggle; HTMX clear-seen with confirm dialog
+- `/admin/feedback` — all feedback across all users, newest first
+
+**Stack**: FastAPI APIRouter mounted on the existing `eat-the-elephant` Railway service.
+Jinja2 templates in `src/elephant/templates/admin/`. Tailwind CDN + HTMX CDN. Dark sidebar layout.
+Environment badge shows PRODUCTION (red) vs DEVELOPMENT (green) so you always know which DB you're on.
+
+**Activity chart approach**: `elephant_digests` table is empty in prod (never inserted into).
+Used `COUNT(DISTINCT topic_id) GROUP BY date_trunc('day', seen_at)` as digest activity proxy.
+
+**Slot display**: slots `days` column is comma-separated ints ("0,1,2,3,4" = Mon-Fri).
+Converted server-side in `_fmt_slot()` before passing to template (Jinja can't do `int()` cleanly).
+
+To enable locally: `ADMIN_PASSWORD=elephant-dev` in `.env`. For prod: set via Railway variable.

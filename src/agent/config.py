@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # for local development; set it for anything you deploy publicly.
     app_password: str | None = Field(default=None, description="Password for deployed web apps.")
 
+    # --- Admin panel (optional) ---------------------------------------------
+    # Set ADMIN_PASSWORD to enable the /admin interface. Without it the panel
+    # is disabled (returns 404) even in production.
+    admin_password: str | None = Field(default=None, description="Password for the /admin panel.")
+
     # --- Media: fal.ai (optional) -------------------------------------------
     # Get a key at https://fal.ai/dashboard/keys. Needed for the media service.
     fal_key: str | None = Field(default=None, description="fal.ai API key (FAL_KEY).")

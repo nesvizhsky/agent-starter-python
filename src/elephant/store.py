@@ -178,6 +178,20 @@ async def set_user_timezone(telegram_id: int, timezone: str) -> None:
     )
 
 
+async def update_user(
+    telegram_id: int, *, language: str | None = None, timezone: str | None = None
+) -> None:
+    """Update user profile fields from the admin panel.
+
+    Timezone change fans out to all topics (same as set_user_timezone) so
+    scheduling continues to work correctly.
+    """
+    if language is not None:
+        await set_user_language(telegram_id, language)
+    if timezone is not None:
+        await set_user_timezone(telegram_id, timezone)
+
+
 async def set_topic_display_fields(
     topic_id: UUID,
     display_name: str | None,
@@ -214,6 +228,16 @@ async def get_topic(telegram_id: int, topic_id: UUID) -> Topic | None:
     )
     if row is None:
         return None
+    topic = _topic(row)
+    topic.slots = (await _slots_by_topic([topic.id])).get(topic.id, [])
+    return topic
+
+
+async def get_topic_admin(topic_id: UUID) -> Topic:
+    """Fetch a topic by ID only (no telegram_id check). Admin use only."""
+    row = await db.fetchrow("SELECT * FROM elephant_topics WHERE id = $1", topic_id)
+    if row is None:
+        raise KeyError(f"Topic {topic_id} not found")
     topic = _topic(row)
     topic.slots = (await _slots_by_topic([topic.id])).get(topic.id, [])
     return topic

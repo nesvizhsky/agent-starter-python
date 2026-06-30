@@ -1,0 +1,242 @@
+{% extends "admin/base.html" %}
+{% set active = "dashboard" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl space-y-8">
+
+  <h1 class="text-2xl font-bold text-white">Dashboard</h1>
+
+  <!-- Stat cards row 1 -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    {% set cards = [
+      ("Total users",      stats.total_users,      "text-blue-400"),
+      ("Active users 7d",  stats.active_users_7d,  "text-green-400"),
+      ("Active users 30d", stats.active_users_30d, "text-green-300"),
+      ("Total topics",     stats.total_topics,     "text-purple-400"),
+    ] %}
+    {% for label, value, color in cards %}
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <div class="text-xs text-gray-500 mb-1">{{ label }}</div>
+      <div class="text-3xl font-bold {{ color }}">{{ value or 0 }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Stat cards row 2 -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <div class="text-xs text-gray-500 mb-1">Active topics</div>
+      <div class="text-3xl font-bold text-teal-400">{{ stats.active_topics or 0 }}</div>
+    </div>
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <div class="text-xs text-gray-500 mb-1">Paused topics</div>
+      <div class="text-3xl font-bold text-yellow-400">{{ stats.paused_topics or 0 }}</div>
+    </div>
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <div class="text-xs text-gray-500 mb-1">Total seen articles</div>
+      <div class="text-3xl font-bold text-gray-400">{{ stats.total_seen or 0 }}</div>
+    </div>
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <div class="text-xs text-gray-500 mb-1">Stale topics</div>
+      <div class="text-3xl font-bold {% if stats.stale_topics %}text-red-400{% else %}text-gray-600{% endif %}">
+        {{ stats.stale_topics or 0 }}
+      </div>
+      <div class="text-xs text-gray-600 mt-1">active, no digest 48h+</div>
+    </div>
+  </div>
+
+  <!-- Charts row -->
+  <div class="grid grid-cols-2 gap-4">
+
+    <!-- Digest activity -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+      <h2 class="text-sm font-semibold text-gray-300 mb-4">Digest activity (last 30 days)</h2>
+      {% if activity %}
+      <div class="flex items-stretch gap-0.5 h-24">
+        {% for row in activity %}
+          {% set pct = (row.digests / max_digests * 100)|int %}
+          <div class="flex-1 relative group">
+            <div class="absolute -top-7 left-1/2 -translate-x-1/2 bg-gray-700 text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-10">
+              {{ row.day }}: {{ row.digests }}
+            </div>
+            <div class="absolute bottom-0 left-0 right-0 bg-blue-600 rounded-sm" style="height: {{ pct }}%"></div>
+          </div>
+        {% endfor %}
+      </div>
+      <div class="flex justify-between text-xs text-gray-600 mt-1">
+        <span>{{ activity[0].day }}</span><span>{{ activity[-1].day }}</span>
+      </div>
+      {% else %}
+      <p class="text-gray-500 text-sm">No activity yet.</p>
+      {% endif %}
+    </div>
+
+    <!-- User growth -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+      <h2 class="text-sm font-semibold text-gray-300 mb-4">New users (last 30 days)</h2>
+      {% if growth %}
+      {% set max_growth = growth|map(attribute='n')|max %}
+      <div class="flex items-stretch gap-0.5 h-24">
+        {% for row in growth %}
+          {% set pct = (row.n / max_growth * 100)|int if max_growth > 0 else 0 %}
+          <div class="flex-1 relative group">
+            <div class="absolute -top-7 left-1/2 -translate-x-1/2 bg-gray-700 text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-10">
+              {{ row.day }}: {{ row.n }}
+            </div>
+            <div class="absolute bottom-0 left-0 right-0 bg-green-600 rounded-sm" style="height: {{ pct }}%"></div>
+          </div>
+        {% endfor %}
+      </div>
+      <div class="flex justify-between text-xs text-gray-600 mt-1">
+        <span>{{ growth[0].day }}</span><span>{{ growth[-1].day }}</span>
+      </div>
+      {% else %}
+      <p class="text-gray-500 text-sm">No users yet.</p>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <!-- Geography + Language + Distribution row -->
+  <div class="grid grid-cols-3 gap-4">
+
+    <!-- Geography (timezone-based) -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <h2 class="text-sm font-semibold text-gray-300 mb-3">Geography</h2>
+      {% if geo_rows %}
+      <div class="space-y-2">
+        {% for row in geo_rows %}
+        {% set pct = (row.n / geo_total * 100)|int %}
+        <div>
+          <div class="flex justify-between text-xs mb-0.5">
+            <span class="text-gray-300 truncate max-w-[70%]">{{ row.tz }}</span>
+            <span class="text-gray-500">{{ row.n }}</span>
+          </div>
+          <div class="h-1.5 bg-gray-800 rounded-full">
+            <div class="h-1.5 bg-purple-500 rounded-full" style="width: {{ pct }}%"></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-gray-600 text-xs">No data</p>
+      {% endif %}
+    </div>
+
+    <!-- Language breakdown -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <h2 class="text-sm font-semibold text-gray-300 mb-3">Languages</h2>
+      {% if lang_rows %}
+      <div class="space-y-2">
+        {% for row in lang_rows %}
+        {% set pct = (row.n / lang_total * 100)|int %}
+        <div>
+          <div class="flex justify-between text-xs mb-0.5">
+            <span class="text-gray-300">{{ row.lang }}</span>
+            <span class="text-gray-500">{{ row.n }} ({{ pct }}%)</span>
+          </div>
+          <div class="h-1.5 bg-gray-800 rounded-full">
+            <div class="h-1.5 bg-blue-500 rounded-full" style="width: {{ pct }}%"></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-gray-600 text-xs">No data</p>
+      {% endif %}
+    </div>
+
+    <!-- Topics per user -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <h2 class="text-sm font-semibold text-gray-300 mb-3">Topics per user</h2>
+      {% if dist_rows %}
+      <div class="space-y-2">
+        {% set max_dist = dist_rows|map(attribute='users')|max %}
+        {% for row in dist_rows %}
+        {% set pct = (row.users / max_dist * 100)|int if max_dist > 0 else 0 %}
+        <div>
+          <div class="flex justify-between text-xs mb-0.5">
+            <span class="text-gray-300">{{ row.count }} topic{% if row.count != 1 %}s{% endif %}</span>
+            <span class="text-gray-500">{{ row.users }} user{% if row.users != 1 %}s{% endif %}</span>
+          </div>
+          <div class="h-1.5 bg-gray-800 rounded-full">
+            <div class="h-1.5 bg-teal-500 rounded-full" style="width: {{ pct }}%"></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-gray-600 text-xs">No data</p>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <!-- Stale topics -->
+  {% if stale %}
+  <div class="bg-gray-900 border border-red-900/50 rounded-xl">
+    <div class="px-6 py-4 border-b border-red-900/50 flex items-center gap-2">
+      <span class="text-red-400 text-sm">⚠</span>
+      <h2 class="text-sm font-semibold text-red-300">Stale topics — active but no digest in 48h+</h2>
+    </div>
+    <div class="divide-y divide-gray-800">
+      {% for t in stale %}
+      <div class="px-6 py-3 flex items-center justify-between text-sm">
+        <div>
+          <a href="/admin/topics/{{ t.id }}" class="text-blue-400 hover:underline">{{ t.name }}</a>
+          <span class="text-gray-600 text-xs ml-2">
+            {{ t.first_name }}{% if t.username %} @{{ t.username }}{% endif %}
+          </span>
+        </div>
+        <span class="text-red-400 text-xs">last: {{ time_ago(t.last_sent_at) }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Recent digest activity -->
+  <div class="bg-gray-900 border border-gray-800 rounded-xl">
+    <div class="px-6 py-4 border-b border-gray-800">
+      <h2 class="text-sm font-semibold text-gray-300">Recent digest activity</h2>
+    </div>
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-xs text-gray-500 border-b border-gray-800">
+          <th class="text-left px-6 py-3">When</th>
+          <th class="text-left px-6 py-3">User</th>
+          <th class="text-left px-6 py-3">Topic</th>
+          <th class="text-left px-6 py-3">Status</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-800">
+        {% for r in recent %}
+        <tr class="hover:bg-gray-800/50">
+          <td class="px-6 py-3 text-gray-400 whitespace-nowrap">{{ time_ago(r.last_sent_at) }}</td>
+          <td class="px-6 py-3">
+            <a href="/admin/users/{{ r.telegram_id }}" class="text-blue-400 hover:underline">
+              {{ r.first_name }}{% if r.username %} <span class="text-gray-500">@{{ r.username }}</span>{% endif %}
+            </a>
+          </td>
+          <td class="px-6 py-3">
+            <a href="/admin/topics/{{ r.topic_id }}" class="text-white hover:text-blue-400">{{ r.topic_name }}</a>
+          </td>
+          <td class="px-6 py-3">
+            {% if r.paused %}
+              <span class="text-yellow-400 text-xs">paused</span>
+            {% else %}
+              <span class="text-green-400 text-xs">active</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="px-6 py-8 text-gray-500 text-center">No digests sent yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+{% endblock %}

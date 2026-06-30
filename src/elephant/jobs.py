@@ -8,6 +8,7 @@ runs the pipeline, and isolates per-topic failures.
 from __future__ import annotations
 
 from datetime import datetime
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from loguru import logger
@@ -212,6 +213,17 @@ async def _run_digest(
 # ---------------------------------------------------------------------------
 # Public runner
 # ---------------------------------------------------------------------------
+
+
+async def run_topic_now(topic_id: UUID, bot: Bot) -> None:
+    """Run the digest pipeline for a single topic immediately, ignoring schedule.
+
+    Used by the admin "Run now" button. Behaves like a manual /check — sends
+    a "nothing new" message if there are no fresh articles, so the admin can
+    confirm the pipeline ran.
+    """
+    topic = await store.get_topic_admin(topic_id)
+    await _run_digest(topic, bot, slot=None)
 
 
 async def run_due_digests(bot: Bot, *, force: bool = False) -> int:

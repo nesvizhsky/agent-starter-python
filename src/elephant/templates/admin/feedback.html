@@ -1,0 +1,43 @@
+{% extends "admin/base.html" %}
+{% set active = "feedback" %}
+
+{% block title %}Feedback{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl space-y-6">
+
+  <h1 class="text-2xl font-bold text-white">Feedback <span class="text-gray-500 text-lg font-normal">({{ feedback|length }})</span></h1>
+
+  {% if feedback %}
+  <div class="bg-gray-900 border border-gray-800 rounded-xl divide-y divide-gray-800">
+    {% for f in feedback %}
+    <div class="px-6 py-4 text-sm">
+      <div class="flex items-center gap-3 flex-wrap">
+        <span class="text-gray-500 text-xs whitespace-nowrap">{{ time_ago(f.created_at) }}</span>
+        {% if f.signal %}
+          <span class="bg-gray-800 text-gray-300 text-xs px-2 py-0.5 rounded font-mono">{{ f.signal }}</span>
+        {% endif %}
+        <a href="/admin/users/{{ f.telegram_id }}" class="text-blue-400 text-xs hover:underline">
+          {{ f.first_name or f.telegram_id }}{% if f.username %} @{{ f.username }}{% endif %}
+        </a>
+        {% if f.topic_name %}
+          <span class="text-gray-600 text-xs">›</span>
+          <a href="/admin/topics/{{ f.topic_id }}" class="text-gray-400 text-xs hover:text-white">
+            {{ f.topic_name }}
+          </a>
+        {% endif %}
+      </div>
+      {% if f.note %}
+        <p class="text-gray-200 mt-2 leading-relaxed">{{ f.note }}</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="bg-gray-900 border border-gray-800 rounded-xl p-12 text-center text-gray-500">
+    No feedback yet.
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
