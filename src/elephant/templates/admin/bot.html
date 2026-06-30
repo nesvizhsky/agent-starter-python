@@ -37,6 +37,13 @@
   </div>
   {% endif %}
 
+  {% if is_readonly %}
+  <div class="bg-gray-900 border border-gray-800 rounded-xl px-6 py-8 text-center">
+    <p class="text-gray-500 text-sm">Read-only access — bot settings cannot be changed.</p>
+    <p class="text-gray-600 text-xs mt-1">The information above is current and live from Telegram.</p>
+  </div>
+  {% else %}
+
   <!-- Edit form -->
   <form method="post" action="/admin/bot" enctype="multipart/form-data"
         class="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-5">
@@ -92,6 +99,8 @@
     <p>Changes to name, description, and short description apply immediately via the Bot API.</p>
     <p>Bot <strong class="text-gray-500">username</strong> (@handle) can only be changed via <a href="https://t.me/BotFather" class="text-gray-400 hover:text-white underline" target="_blank">@BotFather</a>.</p>
   </div>
+
+  {% endif %}
 
 </div>
 {% endblock %}

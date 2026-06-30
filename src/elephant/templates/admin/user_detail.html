@@ -30,7 +30,7 @@
         <div class="text-gray-500 text-xs mt-0.5">Joined: {{ time_ago(user.created_at) }}</div>
       </div>
 
-      {% if editing %}
+      {% if editing and not is_readonly %}
         <!-- EDIT MODE: inline form -->
         <form method="post" class="flex items-start gap-3">
           <div class="space-y-2">
@@ -63,10 +63,12 @@
             <div class="text-gray-400 text-xs">Language: <span class="text-white">{{ user.language or '—' }}</span></div>
             <div class="text-gray-400 text-xs">Timezone: <span class="text-white">{{ user.timezone or 'UTC' }}</span></div>
           </div>
+          {% if not is_readonly %}
           <a href="/admin/users/{{ user.telegram_id }}?edit=1"
              class="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white px-3 py-1.5 rounded border border-gray-700 transition whitespace-nowrap">
             ✏️ Edit
           </a>
+          {% endif %}
         </div>
       {% endif %}
 
@@ -102,8 +104,10 @@
               <span class="text-green-400 text-xs font-semibold">ACTIVE</span>
             {% endif %}
             <div class="text-gray-500 text-xs mt-1">last: {{ time_ago(t.last_sent_at) }}</div>
+            {% if not is_readonly %}
             <a href="/admin/topics/{{ t.id }}?edit=1"
                class="inline-block mt-2 text-xs text-gray-600 hover:text-blue-400">✏️ Edit</a>
+            {% endif %}
           </div>
         </div>
       </div>

@@ -13,11 +13,14 @@
   <aside class="w-52 shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col">
     <div class="p-4 border-b border-gray-800">
       <div class="text-sm font-bold text-white">🐘 Eat the Elephant</div>
-      <div class="text-xs mt-1">
+      <div class="text-xs mt-1 flex items-center gap-1.5 flex-wrap">
         {% if is_prod %}
           <span class="bg-red-900 text-red-300 px-2 py-0.5 rounded font-semibold">PRODUCTION</span>
         {% else %}
           <span class="bg-green-900 text-green-300 px-2 py-0.5 rounded font-semibold">DEVELOPMENT</span>
+        {% endif %}
+        {% if is_readonly %}
+          <span class="bg-gray-700 text-gray-400 px-2 py-0.5 rounded font-semibold">READ ONLY</span>
         {% endif %}
       </div>
     </div>
@@ -45,6 +48,11 @@
         <a href="/admin/logs" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-800 {% if active == 'logs' %}bg-gray-800 text-white{% else %}text-gray-400{% endif %}">
           📋 Logs
         </a>
+        {% if not is_readonly %}
+        <a href="/admin/settings" class="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-800 {% if active == 'settings' %}bg-gray-800 text-white{% else %}text-gray-400{% endif %}">
+          🔑 Access
+        </a>
+        {% endif %}
       </div>
     </nav>
     <div class="p-3 border-t border-gray-800">

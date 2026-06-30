@@ -62,8 +62,10 @@
             {% endif %}
           </td>
           <td class="px-6 py-3 text-right">
+            {% if not is_readonly %}
             <a href="/admin/topics/{{ t.id }}?edit=1"
                class="text-xs text-gray-600 hover:text-blue-400 whitespace-nowrap">✏️ Edit</a>
+            {% endif %}
           </td>
         </tr>
         {% else %}

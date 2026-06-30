@@ -406,6 +406,27 @@ async def clear_seen(topic_id: UUID) -> int:
     return n
 
 
+async def get_admin_setting(key: str) -> str | None:
+    row = await db.fetchrow("SELECT value FROM elephant_admin_settings WHERE key = $1", key)
+    return str(row["value"]) if row else None
+
+
+async def set_admin_setting(key: str, value: str) -> None:
+    await db.execute(
+        """
+        INSERT INTO elephant_admin_settings (key, value)
+        VALUES ($1, $2)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+        """,
+        key,
+        value,
+    )
+
+
+async def delete_admin_setting(key: str) -> None:
+    await db.execute("DELETE FROM elephant_admin_settings WHERE key = $1", key)
+
+
 async def log_admin_action(action: str, entity: str, details: str = "") -> None:
     """Append a row to the admin audit log. Fire-and-forget: never raises."""
     with contextlib.suppress(Exception):

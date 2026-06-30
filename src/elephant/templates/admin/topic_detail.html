@@ -33,14 +33,18 @@
       <div id="pause-block" class="flex items-center gap-3 shrink-0">
         {% if topic.paused %}
           <span class="text-yellow-400 text-xs font-semibold">PAUSED</span>
+          {% if not is_readonly %}
           <button hx-post="/admin/topics/{{ topic.id }}/pause"
                   hx-target="#pause-block" hx-swap="outerHTML"
                   class="px-3 py-1 rounded text-xs text-white bg-green-700 hover:bg-green-600">Resume</button>
+          {% endif %}
         {% else %}
           <span class="text-green-400 text-xs font-semibold">ACTIVE</span>
+          {% if not is_readonly %}
           <button hx-post="/admin/topics/{{ topic.id }}/pause"
                   hx-target="#pause-block" hx-swap="outerHTML"
                   class="px-3 py-1 rounded text-xs text-white bg-yellow-700 hover:bg-yellow-600">Pause</button>
+          {% endif %}
         {% endif %}
       </div>
     </div>
@@ -55,10 +59,12 @@
         <div class="text-xs text-gray-500">Seen articles</div>
         <div id="seen-info" class="flex items-center gap-2">
           <span class="text-white">{{ seen_count }}</span>
+          {% if not is_readonly %}
           <button hx-post="/admin/topics/{{ topic.id }}/clear-seen"
                   hx-target="#seen-info" hx-swap="outerHTML"
                   hx-confirm="Clear all {{ seen_count }} seen records? The next digest may repeat old news."
                   class="text-xs text-red-400 hover:text-red-300 underline">clear</button>
+          {% endif %}
         </div>
       </div>
       <div>
@@ -71,6 +77,7 @@
     </div>
 
     <!-- Run now buttons -->
+    {% if not is_readonly %}
     <div class="pt-4 border-t border-gray-800 flex items-center gap-3 flex-wrap">
       <button hx-post="/admin/topics/{{ topic.id }}/run"
               hx-target="#run-status" hx-swap="outerHTML"
@@ -85,10 +92,11 @@
       </button>
       <span id="run-status" class="text-gray-600 text-xs"></span>
     </div>
+    {% endif %}
   </div>
 
   <!-- Settings: view mode or edit mode -->
-  {% if editing %}
+  {% if editing and not is_readonly %}
 
   <!-- EDIT MODE -->
   <form method="post" action="/admin/topics/{{ topic.id }}" class="bg-gray-900 border border-blue-800 rounded-xl p-6 space-y-5">
@@ -165,10 +173,12 @@
   <div class="bg-gray-900 border border-gray-800 rounded-xl">
     <div class="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
       <h2 class="text-sm font-semibold text-gray-300">Settings</h2>
+      {% if not is_readonly %}
       <a href="/admin/topics/{{ topic.id }}?edit=1"
          class="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white px-3 py-1.5 rounded border border-gray-700 transition">
         ✏️ Edit
       </a>
+      {% endif %}
     </div>
     <div class="divide-y divide-gray-800">
 

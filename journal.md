@@ -1312,3 +1312,42 @@ Used `COUNT(DISTINCT topic_id) GROUP BY date_trunc('day', seen_at)` as digest ac
 Converted server-side in `_fmt_slot()` before passing to template (Jinja can't do `int()` cleanly).
 
 To enable locally: `ADMIN_PASSWORD=elephant-dev` in `.env`. For prod: set via Railway variable.
+
+## 2026-06-30 — Systemic digest quality fixes: off-topic filtering + state media
+
+Two systemic issues diagnosed from a real production digest (Ukraine war topic with Rwanda nuclear
+deal, EU gas storage, and India oil imports appearing as stories).
+
+**Fix 1 — off-topic clustering (perspectives.py)**
+The clustering LLM was including articles that are thematically adjacent to the topic but not
+actually about it (same country ≠ same topic). Tightened rule 1 in the system prompt with a
+concrete test: "Would this specific event exist and be newsworthy if this topic didn't exist?
+If yes, discard it." Also strengthened the per-topic filter in `_format_prompt`. The test
+verifies this with a real LLM call: Rwanda nuclear deal and EU gas must be rejected when
+clustering for a Ukraine war topic.
+
+**Fix 2 — state media exclusion was wrong (research.py)**
+`_NATIVE_QUERY_INSTRUCTIONS` said "Avoid: state-owned TV news channels". This was wrong and
+was pointed out by the user: on political/conflict topics (Ukraine, Israel-Palestine, Iran-US),
+the state IS one of the parties, so state media represents a legitimate perspective that must
+appear. RT, TASS, BBC, Al Jazeera — all state-funded to varying degrees, all valid.
+Removed the exclusion and replaced with a positive framing: state and official sources are
+valid, especially on political/conflict/policy topics. Quality filtering stays but targets
+FORMAT (aggregators, blogs, press releases), not ownership.
+
+The "RT-only" stories in the digest turned out to be a symptom of fix 1: those stories were
+off-topic and happened to only have RT coverage. Fixing the filter removes both problems at once.
+
+## 2026-06-30 — Added read-only admin role to admin panel
+
+The full admin wanted to share panel access with someone (e.g. a collaborator) who should be able to see everything but not make changes.
+
+Design: two roles, one login page.
+- `full` — main admin, ADMIN_PASSWORD env var, can read+write everything + manage RO access
+- `ro` — read-only, password stored hashed in DB (elephant_admin_settings table), can browse all data, all POST routes return 403
+
+Auth is still stateless: cookie = `{role}:{HMAC(password, role-specific-salt)}`. The RO password lives in the DB (not env var) so the full admin can set/change/revoke it directly from the panel Settings page without touching Railway variables.
+
+What RO users can't do (hidden in UI + 403 server-side): pause/resume topics, run digests, clear seen records, edit topics/users, change bot settings, manage access.
+
+New: `elephant_admin_settings` table (migration 014) for generic key-value admin config. First use is `ro_password_hash`. New `/admin/settings` page (full admin only) lets you set/change/revoke the RO password. "Access" link in sidebar hidden for RO users.

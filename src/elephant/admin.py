@@ -3,9 +3,15 @@
 Routes live under /admin. Protected by ADMIN_PASSWORD env var (cookie-based
 session). If ADMIN_PASSWORD is not set, all /admin routes return 404.
 
-Auth is stateless: the session cookie holds an HMAC of the password, so it
+Two roles:
+  full  — the main admin (password from ADMIN_PASSWORD env var). Can read and
+           write everything, including managing the read-only admin.
+  ro    — read-only admin (password stored in DB via the Settings page). Can
+           view everything; all mutating routes return 403.
+
+Auth is stateless: the cookie stores '{role}:{HMAC(password, salt)}', so it
 invalidates automatically when the password changes, with no server-side session
-store needed.
+store needed. The RO password hash lives in elephant_admin_settings (DB).
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Cookie, Form, Request, UploadFile
@@ -40,6 +46,14 @@ _templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 _COOKIE = "elephant_admin"
 _COOKIE_MAX_AGE = 60 * 60 * 8  # 8 hours
+_RO_SETTINGS_KEY = "ro_password_hash"
+_RO_USERNAME_KEY = "ro_username"
+_RO_HTMX = '<span class="text-red-400 text-xs">Read-only: cannot make changes.</span>'
+_RO_RUN_HTMX = (
+    '<span id="run-status" class="text-red-400 text-xs">Read-only: cannot make changes.</span>'
+)
+_FULL_SALT = b"elephant-admin-v1"
+_RO_SALT = b"elephant-admin-ro-v1"
 
 
 # ---------------------------------------------------------------------------
@@ -47,25 +61,48 @@ _COOKIE_MAX_AGE = 60 * 60 * 8  # 8 hours
 # ---------------------------------------------------------------------------
 
 
-def _token(password: str) -> str:
-    return hmac.new(password.encode(), b"elephant-admin-v1", hashlib.sha256).hexdigest()
+def _hash(password: str, salt: bytes) -> str:
+    return hmac.new(password.encode(), salt, hashlib.sha256).hexdigest()
 
 
-def _authenticated(cookie: str | None) -> bool:
-    pw = get_settings().admin_password
-    if not pw or not cookie:
-        return False
-    return secrets.compare_digest(cookie, _token(pw))
+def _make_cookie(role: Literal["full", "ro"], password: str) -> str:
+    salt = _FULL_SALT if role == "full" else _RO_SALT
+    return f"{role}:{_hash(password, salt)}"
 
 
 def _enabled() -> bool:
     return bool(get_settings().admin_password)
 
 
-def _render(template: str, request: Request, **ctx: Any) -> HTMLResponse:
+async def _get_role(cookie: str | None) -> Literal["full", "ro"] | None:
+    """Return 'full', 'ro', or None (not authenticated)."""
+    if not cookie:
+        return None
+    pw = get_settings().admin_password
+    full_expected = f"full:{_hash(pw, _FULL_SALT)}" if pw else None
+    if (
+        full_expected
+        and cookie.startswith("full:")
+        and secrets.compare_digest(cookie, full_expected)
+    ):
+        return "full"
+    if cookie.startswith("ro:"):
+        ro_hash = await store.get_admin_setting(_RO_SETTINGS_KEY)
+        if ro_hash and secrets.compare_digest(cookie, f"ro:{ro_hash}"):
+            return "ro"
+    return None
+
+
+def _render(
+    template: str,
+    request: Request,
+    role: Literal["full", "ro"] = "full",
+    **ctx: Any,
+) -> HTMLResponse:
     settings = get_settings()
     ctx["env"] = settings.environment
     ctx["is_prod"] = settings.is_production
+    ctx["is_readonly"] = role == "ro"
     return _templates.TemplateResponse(request, template, ctx)
 
 
@@ -84,22 +121,47 @@ async def login_page(request: Request) -> Response:
 @router.post("/login", response_class=HTMLResponse)
 async def login_submit(
     request: Request,
+    username: str = Form(...),
     password: str = Form(...),
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    pw = get_settings().admin_password
-    if pw and secrets.compare_digest(password, pw):
+    s = get_settings()
+    pw = s.admin_password
+    # Full admin check — username + password both must match
+    if (
+        pw
+        and secrets.compare_digest(username, s.admin_username)
+        and secrets.compare_digest(password, pw)
+    ):
         resp = RedirectResponse("/admin", status_code=303)
         resp.set_cookie(
             _COOKIE,
-            _token(pw),
+            _make_cookie("full", pw),
             max_age=_COOKIE_MAX_AGE,
             httponly=True,
             samesite="lax",
         )
         return resp
-    return _render("admin/login.html", request, error="Wrong password")
+    # Read-only admin check — username + password hash both stored in DB
+    ro_username = await store.get_admin_setting(_RO_USERNAME_KEY)
+    ro_hash = await store.get_admin_setting(_RO_SETTINGS_KEY)
+    if (
+        ro_username
+        and ro_hash
+        and secrets.compare_digest(username, ro_username)
+        and secrets.compare_digest(_hash(password, _RO_SALT), ro_hash)
+    ):
+        resp = RedirectResponse("/admin", status_code=303)
+        resp.set_cookie(
+            _COOKIE,
+            _make_cookie("ro", password),
+            max_age=_COOKIE_MAX_AGE,
+            httponly=True,
+            samesite="lax",
+        )
+        return resp
+    return _render("admin/login.html", request, error="Wrong username or password")
 
 
 @router.get("/logout")
@@ -122,7 +184,8 @@ async def dashboard(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
+    role = await _get_role(elephant_admin)
+    if role is None:
         return RedirectResponse("/admin/login", status_code=303)
 
     stats_rows = await db.fetch(
@@ -235,6 +298,7 @@ async def dashboard(
     return _render(
         "admin/dashboard.html",
         request,
+        role=role,
         stats=stats,
         activity=activity_rows,
         max_digests=max_digests,
@@ -261,7 +325,8 @@ async def users_list(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
+    role = await _get_role(elephant_admin)
+    if role is None:
         return RedirectResponse("/admin/login", status_code=303)
 
     rows = await db.fetch(
@@ -278,7 +343,7 @@ async def users_list(
         ORDER BY u.created_at DESC
         """
     )
-    return _render("admin/users.html", request, users=[dict(r) for r in rows])
+    return _render("admin/users.html", request, role=role, users=[dict(r) for r in rows])
 
 
 @router.get("/users/{telegram_id}", response_class=HTMLResponse)
@@ -291,7 +356,8 @@ async def user_detail(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
+    role = await _get_role(elephant_admin)
+    if role is None:
         return RedirectResponse("/admin/login", status_code=303)
 
     user_row = await db.fetchrow("SELECT * FROM elephant_users WHERE telegram_id = $1", telegram_id)
@@ -317,6 +383,7 @@ async def user_detail(
     return _render(
         "admin/user_detail.html",
         request,
+        role=role,
         user=dict(user_row),
         topics=topics,
         seen_by_topic=seen_by_topic,
@@ -334,8 +401,11 @@ async def user_save(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
+    role = await _get_role(elephant_admin)
+    if role is None:
         return RedirectResponse("/admin/login", status_code=303)
+    if role != "full":
+        return Response("Read-only access", status_code=403)
 
     changes: list[str] = []
     if language.strip():
@@ -367,7 +437,8 @@ async def topic_detail(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
+    role = await _get_role(elephant_admin)
+    if role is None:
         return RedirectResponse("/admin/login", status_code=303)
 
     topic_row = await db.fetchrow(
@@ -420,6 +491,7 @@ async def topic_detail(
     return _render(
         "admin/topic_detail.html",
         request,
+        role=role,
         topic=topic,
         owner=owner,
         seen_count=seen_count,
@@ -444,8 +516,11 @@ async def topic_save(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
+    role = await _get_role(elephant_admin)
+    if role is None:
         return RedirectResponse("/admin/login", status_code=303)
+    if role != "full":
+        return Response("Read-only access", status_code=403)
 
     def _split(s: str) -> list[str]:
         return [x.strip() for x in s.splitlines() if x.strip()]
@@ -476,8 +551,9 @@ async def topic_toggle_pause(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
-        return Response(status_code=401)
+    role = await _get_role(elephant_admin)
+    if role != "full":
+        return HTMLResponse(_RO_HTMX)
 
     row = await db.fetchrow("SELECT paused, name FROM elephant_topics WHERE id = $1", topic_id)
     if not row:
@@ -512,8 +588,9 @@ async def topic_clear_seen(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
-        return Response(status_code=401)
+    role = await _get_role(elephant_admin)
+    if role != "full":
+        return HTMLResponse(_RO_HTMX)
     n = await store.clear_seen(topic_id)
     logger.info("admin: cleared {} seen records for topic {}", n, topic_id)
     name_row = await db.fetchrow("SELECT name FROM elephant_topics WHERE id = $1", topic_id)
@@ -531,8 +608,9 @@ async def topic_run_now(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
-        return Response(status_code=401)
+    role = await _get_role(elephant_admin)
+    if role != "full":
+        return HTMLResponse(_RO_RUN_HTMX)
     bot = get_bot()
     if bot is None:
         return HTMLResponse(
@@ -565,8 +643,9 @@ async def topic_clear_and_run(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
-        return Response(status_code=401)
+    role = await _get_role(elephant_admin)
+    if role != "full":
+        return HTMLResponse(_RO_RUN_HTMX)
     bot = get_bot()
     if bot is None:
         return HTMLResponse(
@@ -606,7 +685,8 @@ async def topics_list(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
+    role = await _get_role(elephant_admin)
+    if role is None:
         return RedirectResponse("/admin/login", status_code=303)
 
     rows = await db.fetch(
@@ -620,7 +700,7 @@ async def topics_list(
         ORDER BY t.last_sent_at DESC NULLS LAST
         """
     )
-    return _render("admin/topics.html", request, topics=[dict(r) for r in rows])
+    return _render("admin/topics.html", request, role=role, topics=[dict(r) for r in rows])
 
 
 # ---------------------------------------------------------------------------
@@ -659,11 +739,12 @@ async def logs_page(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
+    role = await _get_role(elephant_admin)
+    if role is None:
         return RedirectResponse("/admin/login", status_code=303)
     audit = await store.get_admin_log()
     lines = _read_log_tail(level_filter=level)
-    return _render("admin/logs.html", request, audit=audit, lines=lines, level=level)
+    return _render("admin/logs.html", request, role=role, audit=audit, lines=lines, level=level)
 
 
 @router.get("/logs/lines", response_class=HTMLResponse)
@@ -672,10 +753,11 @@ async def log_lines_partial(
     elephant_admin: str | None = Cookie(default=None),
     level: str = "ALL",
 ) -> Response:
-    if not _authenticated(elephant_admin):
+    role = await _get_role(elephant_admin)
+    if role is None:
         return Response(status_code=401)
     lines = _read_log_tail(level_filter=level)
-    return _render("admin/log_lines.html", request, lines=lines)
+    return _render("admin/log_lines.html", request, role=role, lines=lines)
 
 
 # ---------------------------------------------------------------------------
@@ -692,7 +774,8 @@ async def bot_settings_page(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
+    role = await _get_role(elephant_admin)
+    if role is None:
         return RedirectResponse("/admin/login", status_code=303)
 
     bot = get_bot()
@@ -728,6 +811,7 @@ async def bot_settings_page(
     return _render(
         "admin/bot.html",
         request,
+        role=role,
         bot_info=bot_info,
         bot_name=bot_name or "",
         bot_desc=bot_desc or "",
@@ -748,8 +832,11 @@ async def bot_settings_save(
 ) -> Response:
     if not _enabled():
         return Response(status_code=404)
-    if not _authenticated(elephant_admin):
+    role = await _get_role(elephant_admin)
+    if role is None:
         return RedirectResponse("/admin/login", status_code=303)
+    if role != "full":
+        return Response("Read-only access", status_code=403)
 
     bot = get_bot()
     if not bot:
@@ -781,6 +868,80 @@ async def bot_settings_save(
         logger.info("admin: bot settings updated: {}", ", ".join(changes))
 
     return RedirectResponse("/admin/bot?saved=1", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Access settings (full admin only — manages read-only admin password)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(
+    request: Request,
+    elephant_admin: str | None = Cookie(default=None),
+    saved: str | None = None,
+    revoked: str | None = None,
+) -> Response:
+    if not _enabled():
+        return Response(status_code=404)
+    role = await _get_role(elephant_admin)
+    if role is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if role != "full":
+        return Response("Admin access required", status_code=403)
+
+    s = get_settings()
+    ro_active = await store.get_admin_setting(_RO_SETTINGS_KEY) is not None
+    ro_username = await store.get_admin_setting(_RO_USERNAME_KEY) or ""
+    return _render(
+        "admin/settings.html",
+        request,
+        role=role,
+        ro_active=ro_active,
+        ro_username=ro_username,
+        full_username=s.admin_username,
+        saved=saved,
+        revoked=revoked,
+    )
+
+
+@router.post("/settings/ro-set")
+async def settings_ro_set(
+    elephant_admin: str | None = Cookie(default=None),
+    ro_username: str = Form(default=""),
+    password: str = Form(default=""),
+) -> Response:
+    if not _enabled():
+        return Response(status_code=404)
+    role = await _get_role(elephant_admin)
+    if role != "full":
+        return Response(status_code=403)
+    uname = ro_username.strip()
+    pw = password.strip()
+    if uname:
+        await store.set_admin_setting(_RO_USERNAME_KEY, uname)
+    if pw:
+        await store.set_admin_setting(_RO_SETTINGS_KEY, _hash(pw, _RO_SALT))
+    if uname or pw:
+        await store.log_admin_action("settings.ro-set", "read-only admin", "credentials updated")
+        logger.info("admin: read-only admin credentials updated")
+    return RedirectResponse("/admin/settings?saved=1", status_code=303)
+
+
+@router.post("/settings/ro-revoke")
+async def settings_ro_revoke(
+    elephant_admin: str | None = Cookie(default=None),
+) -> Response:
+    if not _enabled():
+        return Response(status_code=404)
+    role = await _get_role(elephant_admin)
+    if role != "full":
+        return Response(status_code=403)
+    await store.delete_admin_setting(_RO_SETTINGS_KEY)
+    await store.delete_admin_setting(_RO_USERNAME_KEY)
+    await store.log_admin_action("settings.ro-revoke", "read-only admin", "access revoked")
+    logger.info("admin: read-only admin access revoked")
+    return RedirectResponse("/admin/settings?revoked=1", status_code=303)
 
 
 # ---------------------------------------------------------------------------

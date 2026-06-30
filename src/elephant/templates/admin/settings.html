@@ -1,0 +1,111 @@
+{% extends "admin/base.html" %}
+{% set active = "settings" %}
+
+{% block title %}Access Settings{% endblock %}
+
+{% block content %}
+<div class="max-w-xl space-y-6">
+
+  <h1 class="text-2xl font-bold text-white">Access Settings</h1>
+
+  {% if saved %}
+  <div class="bg-green-950 border border-green-800 text-green-300 text-sm px-4 py-2 rounded-lg">
+    ✓ Read-only password updated. Share it with whoever needs view-only access.
+  </div>
+  {% endif %}
+
+  {% if revoked %}
+  <div class="bg-yellow-950 border border-yellow-800 text-yellow-300 text-sm px-4 py-2 rounded-lg">
+    ✓ Read-only access revoked. Any existing read-only sessions are now invalid.
+  </div>
+  {% endif %}
+
+  <!-- Read-only admin section -->
+  <div class="bg-gray-900 border border-gray-800 rounded-xl divide-y divide-gray-800">
+
+    <div class="px-6 py-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-sm font-semibold text-gray-200">Read-only admin</h2>
+          <p class="text-xs text-gray-500 mt-0.5">
+            A second password that grants view-only access — can see everything, cannot change anything.
+          </p>
+        </div>
+        <div class="shrink-0 ml-4">
+          {% if ro_active %}
+            <span class="text-xs font-semibold px-2 py-1 rounded bg-green-900 text-green-300">ACTIVE</span>
+          {% else %}
+            <span class="text-xs font-semibold px-2 py-1 rounded bg-gray-800 text-gray-500">NOT SET</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="px-6 py-5 space-y-4">
+      <p class="text-xs text-gray-500">
+        Set a username and password for the read-only admin. They log in at
+        <code class="text-gray-400">/admin/login</code> and can browse all data but cannot
+        trigger digests, edit topics, change bot settings, or manage access.
+      </p>
+      <form method="post" action="/admin/settings/ro-set" class="space-y-3">
+        <div class="flex items-end gap-3">
+          <div class="flex-1">
+            <label class="block text-xs text-gray-400 mb-1">Username</label>
+            <input type="text" name="ro_username"
+                   value="{{ ro_username }}"
+                   placeholder="e.g. viewer"
+                   autocomplete="off"
+                   class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500">
+          </div>
+          <div class="flex-1">
+            <label class="block text-xs text-gray-400 mb-1">
+              {% if ro_active %}New password (blank = keep current){% else %}Password{% endif %}
+            </label>
+            <input type="password" name="password"
+                   placeholder="{% if ro_active %}Leave blank to keep…{% else %}Set a password…{% endif %}"
+                   autocomplete="new-password"
+                   class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500">
+          </div>
+          <button type="submit"
+                  class="shrink-0 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold px-4 py-2 rounded transition">
+            {% if ro_active %}Update{% else %}Set credentials{% endif %}
+          </button>
+        </div>
+      </form>
+    </div>
+
+    {% if ro_active %}
+    <div class="px-6 py-4 flex items-center justify-between">
+      <div>
+        <p class="text-xs text-gray-400 font-semibold">Revoke access</p>
+        <p class="text-xs text-gray-600 mt-0.5">Removes the read-only password. Any active read-only sessions will be logged out immediately.</p>
+      </div>
+      <form method="post" action="/admin/settings/ro-revoke">
+        <button type="submit"
+                onclick="return confirm('Revoke read-only admin access?')"
+                class="shrink-0 ml-6 bg-red-900 hover:bg-red-800 text-red-300 text-xs font-semibold px-4 py-2 rounded transition">
+          Revoke access
+        </button>
+      </form>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- Full admin credentials info -->
+  <div class="bg-gray-900 border border-gray-800 rounded-xl px-6 py-4 space-y-2">
+    <h2 class="text-sm font-semibold text-gray-200">Your admin credentials</h2>
+    <div class="flex gap-6 text-xs">
+      <div>
+        <span class="text-gray-500">Username: </span>
+        <code class="text-gray-300">{{ full_username }}</code>
+      </div>
+    </div>
+    <p class="text-xs text-gray-500">
+      Username set via <code class="text-gray-400">ADMIN_USERNAME</code> env var (default: <code class="text-gray-400">admin</code>).
+      Password set via <code class="text-gray-400">ADMIN_PASSWORD</code>. Change either in Railway → Variables.
+    </p>
+  </div>
+
+</div>
+{% endblock %}

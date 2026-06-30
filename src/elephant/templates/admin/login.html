@@ -20,8 +20,13 @@
         </div>
       {% endif %}
       <div>
+        <label class="block text-xs text-gray-400 mb-1">Username</label>
+        <input type="text" name="username" autofocus autocomplete="username"
+               class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500">
+      </div>
+      <div>
         <label class="block text-xs text-gray-400 mb-1">Password</label>
-        <input type="password" name="password" autofocus
+        <input type="password" name="password" autocomplete="current-password"
                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500">
       </div>
       <button type="submit"
