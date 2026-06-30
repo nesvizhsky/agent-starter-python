@@ -65,9 +65,9 @@
         Short description
         <span class="text-gray-600 font-normal">— shown on the bot's profile page (max ~120 chars)</span>
       </label>
-      <input type="text" name="short_description" value="{{ bot_short_desc }}"
-             placeholder="e.g. Your personal multi-perspective news digest"
-             class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500">
+      <textarea name="short_description" rows="3"
+                placeholder="e.g. Your personal multi-perspective news digest"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500 resize-y">{{ bot_short_desc }}</textarea>
     </div>
 
     <div>
