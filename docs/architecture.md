@@ -389,7 +389,11 @@ Failures per user are caught and logged; one user's error doesn't block others.
 ### `app.py`
 FastAPI. Lifespan: init PTB + apply migrations + register webhook (if `PUBLIC_URL` set).
 - `POST /telegram/webhook` — verified by `X-Telegram-Bot-Api-Secret-Token` header
-- `POST /cron/tick` — verified by `X-Cron-Secret` header; calls both job runners
+- `POST /cron/tick` — verified by `X-Cron-Secret` header; calls both job runners.
+  Gated by a global `digests_paused` admin-panel toggle (dashboard "Pause
+  auto-sends" button, stored in `elephant_admin_settings`) — when set, the tick
+  is a no-op. Manual force-runs (admin "Run now" per topic, `/check`,
+  `elephant-cron`) bypass this switch entirely.
 
 ## Services used
 

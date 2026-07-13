@@ -427,6 +427,22 @@ async def delete_admin_setting(key: str) -> None:
     await db.execute("DELETE FROM elephant_admin_settings WHERE key = $1", key)
 
 
+_DIGESTS_PAUSED_KEY = "digests_paused"
+
+
+async def is_digests_paused() -> bool:
+    """Global kill switch for scheduled sends (admin dashboard toggle).
+
+    Only gates the automatic cron path — manual force-runs (elephant-cron,
+    admin 'Run now', /check) go through _run_digest directly and ignore this.
+    """
+    return await get_admin_setting(_DIGESTS_PAUSED_KEY) == "true"
+
+
+async def set_digests_paused(paused: bool) -> None:
+    await set_admin_setting(_DIGESTS_PAUSED_KEY, "true" if paused else "false")
+
+
 async def log_admin_action(action: str, entity: str, details: str = "") -> None:
     """Append a row to the admin audit log. Fire-and-forget: never raises."""
     with contextlib.suppress(Exception):

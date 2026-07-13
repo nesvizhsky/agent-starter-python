@@ -299,6 +299,9 @@ async def dashboard(
         "admin/dashboard.html",
         request,
         role=role,
+        digests_pause_block=_digests_pause_block(
+            await store.is_digests_paused(), readonly=role != "full"
+        ),
         stats=stats,
         activity=activity_rows,
         max_digests=max_digests,
@@ -311,6 +314,49 @@ async def dashboard(
         stale=[dict(r) for r in stale],
         recent=[dict(r) for r in recent],
     )
+
+
+@router.post("/digests-pause", response_class=HTMLResponse)
+async def digests_toggle_pause(
+    elephant_admin: str | None = Cookie(default=None),
+) -> Response:
+    """Global kill switch: stop scheduled cron ticks from sending anything.
+
+    Admin "Run now" and dev tooling (elephant-cron) bypass this — it only
+    gates the hourly /cron/tick path.
+    """
+    if not _enabled():
+        return Response(status_code=404)
+    role = await _get_role(elephant_admin)
+    if role != "full":
+        return HTMLResponse(_RO_HTMX)
+
+    new_paused = not await store.is_digests_paused()
+    await store.set_digests_paused(new_paused)
+    logger.info("admin: global digests_paused={}", new_paused)
+    action = "digests.pause" if new_paused else "digests.resume"
+    await store.log_admin_action(action, "project", "paused" if new_paused else "resumed")
+    return HTMLResponse(_digests_pause_block(new_paused, readonly=False))
+
+
+def _digests_pause_block(paused: bool, *, readonly: bool) -> str:
+    label = "Resume auto-sends" if paused else "Pause auto-sends"
+    cls = "bg-green-700 hover:bg-green-600" if paused else "bg-yellow-700 hover:bg-yellow-600"
+    badge = (
+        '<span class="text-yellow-400 text-xs font-semibold">PAUSED — no automatic digests</span>'
+        if paused
+        else '<span class="text-green-400 text-xs font-semibold">ACTIVE — auto-sends enabled</span>'
+    )
+    button = (
+        ""
+        if readonly
+        else (
+            f'<button hx-post="/admin/digests-pause"'
+            f' hx-target="#digests-pause-block" hx-swap="outerHTML"'
+            f' class="px-3 py-1 rounded text-xs text-white {cls}">{label}</button>'
+        )
+    )
+    return f'<div id="digests-pause-block" class="flex items-center gap-3">{badge}{button}</div>'
 
 
 # ---------------------------------------------------------------------------

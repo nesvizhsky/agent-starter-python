@@ -1351,3 +1351,15 @@ Auth is still stateless: cookie = `{role}:{HMAC(password, role-specific-salt)}`.
 What RO users can't do (hidden in UI + 403 server-side): pause/resume topics, run digests, clear seen records, edit topics/users, change bot settings, manage access.
 
 New: `elephant_admin_settings` table (migration 014) for generic key-value admin config. First use is `ro_password_hash`. New `/admin/settings` page (full admin only) lets you set/change/revoke the RO password. "Access" link in sidebar hidden for RO users.
+
+## 2026-07-13 15:40 — Global pause switch for automatic digests
+
+Wanted to pause the project temporarily (no automatic sends) while keeping the ability to force-run a digest by hand.
+
+First tried disabling it at the infra layer — Railway's `elephant-cron-tick` cron job (hourly `curl /cron/tick`, `deploy.cronSchedule = "0 * * * *"`). Attempted to clear `cronSchedule` via `railway environment edit` (both a JSON patch with `null` and a dot-path patch with `""`) — both reported success but the schedule never actually changed on read-back. Abandoned that route rather than leave infra in an unverified state.
+
+Went with a DB-backed flag instead (reused the existing `elephant_admin_settings` key-value table from the RO-admin work): `store.is_digests_paused()` / `set_digests_paused()`, key `digests_paused`. Gated only in `jobs.run_due_digests()` when `force=False` — that's the one function the scheduled `/cron/tick` calls without force. Every manual path (`elephant-cron` CLI, admin "Run now", `/check`) either passes `force=True` or calls `_run_digest`/`run_topic_now` directly, so they're untouched by the flag.
+
+Added a toggle on the admin dashboard ("Pause auto-sends" / "Resume auto-sends") so this can be flipped without touching Railway or redeploying — reuses the same button-swap HTMX pattern as per-topic pause. Read-only admins see the status but not the button.
+
+This is more reliable than the infra approach turned out to be, and gives a self-serve switch for next time instead of needing me to go through Railway again.

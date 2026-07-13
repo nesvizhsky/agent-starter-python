@@ -232,7 +232,15 @@ async def run_due_digests(bot: Bot, *, force: bool = False) -> int:
     force=True ignores the clock and sends one digest per topic regardless of
     schedule — useful for `elephant-cron` in dev. Returns the number of
     digests successfully sent.
+
+    Scheduled ticks (force=False) honour the admin dashboard's global pause
+    toggle; forced runs never do, so admin "Run now" and dev tooling still
+    work while the project is paused.
     """
+    if not force and await store.is_digests_paused():
+        logger.info("cron tick skipped — digests globally paused")
+        return 0
+
     sent = 0
     for topic in await store.get_all_active_topics():
         now_local = datetime.now(ZoneInfo(topic.timezone))
